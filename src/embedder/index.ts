@@ -676,8 +676,11 @@ export class Embedder {
         this.config.modelPath,
         { config, dtype, device }
       )
+      // Some models list it although the pipeline never loads it, and it does
+      // not affect embeddings.
+      const assetNames = fileNames.filter((name) => name !== 'generation_config.json')
       const files: ModelAssetSnapshotEntry[] = []
-      for (const name of [...new Set(fileNames)].sort()) {
+      for (const name of [...new Set(assetNames)].sort()) {
         const path = await this.resolveAssetPath(name)
         const info = path ? await statOrNull(path) : null
         if (!path || !info?.isFile()) {
