@@ -79,6 +79,7 @@ export interface PipelineTokenizer {
 interface PipelineModelConfig {
   max_position_embeddings?: unknown
   hidden_size?: unknown
+  text_config?: unknown
 }
 
 export interface EmbeddingComputationIdentity {
@@ -131,7 +132,7 @@ interface EmbeddingPipeline {
   ): Promise<{ data?: unknown; dims?: unknown } | null | undefined>
   tokenizer: PipelineTokenizer
   /** Optional: a model reporting no position window takes the tokenizer-only branch. */
-  model?: { config?: PipelineModelConfig }
+  model?: { config?: PipelineModelConfig; sessions?: unknown }
 }
 
 /** True when the loaded pipeline exposes the call and tokenizer surface used here. */
@@ -158,10 +159,30 @@ function isPretrainedConfig(value: unknown): value is PretrainedConfig {
 }
 
 function embeddingDimension(loadedModel: EmbeddingPipeline): number | null {
-  const dimension = loadedModel.model?.config?.hidden_size
+  const dimension = loadedModel.model?.config?.hidden_size ?? declaredHiddenStateWidth(loadedModel)
   return typeof dimension === 'number' && Number.isInteger(dimension) && dimension > 0
     ? dimension
     : null
+}
+
+/**
+ * The last dimension of the `last_hidden_state` output declared by the ONNX
+ * session. Multimodal models such as EmbeddingGemma 2 report no top-level
+ * `hidden_size`, and their nested `text_config.hidden_size` can differ from
+ * the output width.
+ */
+function declaredHiddenStateWidth(loadedModel: EmbeddingPipeline): unknown {
+  const sessions = loadedModel.model?.sessions
+  const session = isObjectLike(sessions) ? sessions['model'] : undefined
+  const outputs = isObjectLike(session) ? session['outputMetadata'] : undefined
+  if (!Array.isArray(outputs)) {
+    return undefined
+  }
+  const hiddenState: unknown = outputs.find(
+    (output) => isObjectLike(output) && output['name'] === 'last_hidden_state'
+  )
+  const shape = isObjectLike(hiddenState) ? hiddenState['shape'] : undefined
+  return Array.isArray(shape) ? shape.at(-1) : undefined
 }
 
 async function statOrNull(filePath: string): Promise<BigIntStats | null> {
@@ -206,7 +227,11 @@ function usableTokenLimit(value: unknown): number | null {
 }
 
 function readPositionWindow(candidate: EmbeddingPipeline): number | null {
-  return usableTokenLimit(candidate.model?.config?.max_position_embeddings)
+  const config = candidate.model?.config
+  // Multimodal models such as EmbeddingGemma 2 nest the text window under `text_config`.
+  const textConfig = config?.text_config
+  const nestedWindow = isObjectLike(textConfig) ? textConfig['max_position_embeddings'] : undefined
+  return usableTokenLimit(config?.max_position_embeddings ?? nestedWindow)
 }
 
 function resolveEffectiveCap(
