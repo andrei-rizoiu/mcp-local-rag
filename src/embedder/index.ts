@@ -165,12 +165,7 @@ function embeddingDimension(loadedModel: EmbeddingPipeline): number | null {
     : null
 }
 
-/**
- * The last dimension of the `last_hidden_state` output declared by the ONNX
- * session. Multimodal models such as EmbeddingGemma 2 report no top-level
- * `hidden_size`, and their nested `text_config.hidden_size` can differ from
- * the output width.
- */
+// A nested `text_config.hidden_size` can differ from the output width.
 function declaredHiddenStateWidth(loadedModel: EmbeddingPipeline): unknown {
   const sessions = loadedModel.model?.sessions
   const session = isObjectLike(sessions) ? sessions['model'] : undefined
@@ -228,7 +223,7 @@ function usableTokenLimit(value: unknown): number | null {
 
 function readPositionWindow(candidate: EmbeddingPipeline): number | null {
   const config = candidate.model?.config
-  // Multimodal models such as EmbeddingGemma 2 nest the text window under `text_config`.
+  // Multimodal models nest the text window under `text_config`.
   const textConfig = config?.text_config
   const nestedWindow = isObjectLike(textConfig) ? textConfig['max_position_embeddings'] : undefined
   return usableTokenLimit(config?.max_position_embeddings ?? nestedWindow)
