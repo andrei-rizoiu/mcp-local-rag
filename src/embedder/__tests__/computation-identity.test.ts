@@ -346,6 +346,24 @@ describe('Embedder computation identity', () => {
     }
   }, 300_000)
 
+  it('takes the dimension from the ONNX output when config.json has no hidden_size', async () => {
+    const modelConfig: unknown = JSON.parse(readFileSync(MODEL_CONFIG_PATH, 'utf8'))
+    if (!isRecord(modelConfig)) {
+      throw new Error('Expected model config object')
+    }
+    delete modelConfig['hidden_size']
+    writeFileSync(MODEL_CONFIG_PATH, JSON.stringify(modelConfig))
+
+    const { Embedder: EmbedderClass } = await import('../index.js')
+    const embedder = new EmbedderClass(createEmbedderConfig())
+    try {
+      const identity = await embedder.getComputationIdentity()
+      expect(identity?.dimension).toBe(384)
+    } finally {
+      await embedder.dispose()
+    }
+  }, 180_000)
+
   it('does not share snapshots when local and cache model copies disagree', async () => {
     const transformers = await import('@huggingface/transformers')
     const previousEnvironment = {

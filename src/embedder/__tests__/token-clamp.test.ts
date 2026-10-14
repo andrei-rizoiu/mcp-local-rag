@@ -16,6 +16,7 @@ interface TokenizerOptions {
 interface FakePipelineShape {
   modelMaxLength?: number
   maxPositionEmbeddings?: number
+  textConfigMaxPositionEmbeddings?: number
 }
 
 function createFakePipeline(shape: FakePipelineShape) {
@@ -29,11 +30,17 @@ function createFakePipeline(shape: FakePipelineShape) {
       get: () => shape.modelMaxLength,
     })
   }
-  const pipeline = Object.assign(async () => ({ data: new Float32Array([1]), dims: [1, 1] }), {
-    tokenizer,
+  const config = {
     ...(shape.maxPositionEmbeddings === undefined
       ? {}
-      : { model: { config: { max_position_embeddings: shape.maxPositionEmbeddings } } }),
+      : { max_position_embeddings: shape.maxPositionEmbeddings }),
+    ...(shape.textConfigMaxPositionEmbeddings === undefined
+      ? {}
+      : { text_config: { max_position_embeddings: shape.textConfigMaxPositionEmbeddings } }),
+  }
+  const pipeline = Object.assign(async () => ({ data: new Float32Array([1]), dims: [1, 1] }), {
+    tokenizer,
+    ...(Object.keys(config).length === 0 ? {} : { model: { config } }),
   })
   return { pipeline, tokenizer, tokenizerCalls }
 }
@@ -61,6 +68,15 @@ describe('installTokenLimitClamp', () => {
     const { pipeline } = createFakePipeline({ modelMaxLength: 1e30, maxPositionEmbeddings: 512 })
 
     expect(installTokenLimitClamp(pipeline).tokenLimit).toBe(510)
+  })
+
+  it('reads the position window from text_config when the top level has none', () => {
+    const { pipeline } = createFakePipeline({
+      modelMaxLength: 1e30,
+      textConfigMaxPositionEmbeddings: 2048,
+    })
+
+    expect(installTokenLimitClamp(pipeline).tokenLimit).toBe(2046)
   })
 
   it('uses the tokenizer limit when no position window is reported', () => {
