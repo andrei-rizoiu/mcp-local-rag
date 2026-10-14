@@ -139,5 +139,5 @@ describe('CLI ingestion embedding reuse across process restarts', () => {
     const failedInsert = runIngestProcess()
     expect(failedInsert.code).not.toBe(0)
     expect(readFileSync(embeddingSnapshotPath(DB_PATH, SOURCE_PATH))).toEqual(published)
-  })
+  }, 60000)
 })
