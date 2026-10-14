@@ -364,6 +364,26 @@ describe('Embedder computation identity', () => {
     }
   }, 180_000)
 
+  it('resolves an identity when the asset list names a generation_config.json that is not on disk', async () => {
+    const { ModelRegistry } = await import('@huggingface/transformers')
+    const listPipelineFiles = ModelRegistry.get_pipeline_files.bind(ModelRegistry)
+    const listing = vi
+      .spyOn(ModelRegistry, 'get_pipeline_files')
+      .mockImplementation(async (...args) => [
+        ...(await listPipelineFiles(...args)),
+        'generation_config.json',
+      ])
+    const { Embedder: EmbedderClass } = await import('../index.js')
+    const embedder = new EmbedderClass(createEmbedderConfig())
+    try {
+      expect(await embedder.getComputationIdentity()).not.toBeNull()
+      expect(listing).toHaveBeenCalled()
+    } finally {
+      listing.mockRestore()
+      await embedder.dispose()
+    }
+  }, 180_000)
+
   it('does not share snapshots when local and cache model copies disagree', async () => {
     const transformers = await import('@huggingface/transformers')
     const previousEnvironment = {
