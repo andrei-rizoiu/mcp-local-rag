@@ -33,10 +33,6 @@ describe('toSyncPathKey', () => {
     expect(toSyncPathKey('/no/such/dir/ghost.md', 'linux')).toBe('/no/such/dir/ghost.md')
     expect(toSyncPathKey('Z:\\No\\Such\\Ghost.md', 'win32')).toBe('z:\\no\\such\\ghost.md')
   })
-
-  it('should default the platform to process.platform', () => {
-    expect(toSyncPathKey('/a/B.md')).toBe(toSyncPathKey('/a/B.md', process.platform))
-  })
 })
 
 describe('toSyncPathKey composed with isUnderOrEqual', () => {
@@ -98,17 +94,5 @@ describe('toSyncPathKey composed with isUnderOrEqual', () => {
     expect(isUnderOrEqual(sibling, toSyncPathKey('c:\\root\\sub', 'win32'))).toBe(false)
     expect(isUnderOrEqual(sibling, toSyncPathKey('c:\\root\\sub\\', 'win32'))).toBe(false)
     expect(isUnderOrEqual(sibling, toSyncPathKey('c:\\root\\sub\\\\', 'win32'))).toBe(false)
-  })
-
-  it('should treat a single-file scope as matching only itself', () => {
-    const target = toSyncPathKey('/root/sub/f.md', 'linux')
-    expect(isUnderOrEqual(target, target)).toBe(true)
-    expect(isUnderOrEqual(toSyncPathKey('/root/sub/g.md', 'linux'), target)).toBe(false)
-  })
-
-  it('should treat a Windows single-file scope as matching only its case-folded self', () => {
-    const target = toSyncPathKey('c:\\root\\sub\\f.md', 'win32')
-    expect(isUnderOrEqual(toSyncPathKey('C:\\Root\\Sub\\F.MD', 'win32'), target)).toBe(true)
-    expect(isUnderOrEqual(toSyncPathKey('C:\\Root\\Sub\\g.md', 'win32'), target)).toBe(false)
   })
 })

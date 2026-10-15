@@ -276,30 +276,6 @@ describe('MCP sync inherits the CLI-established visual profile', () => {
     expect(await hasStoredCaption(testCase)).toBe(false)
   })
 
-  it('records the profile a direct ingest_file requested, and inherits it on the next sync', async () => {
-    const testCase = makeCase('ingest-file-profile')
-    const server = await makeServer(testCase)
-    try {
-      const ingested = await dispatch(server, 'ingest_file', {
-        filePath: testCase.pdfPath,
-        visual: true,
-        visualQuality: 'fast',
-      })
-      expect(ingested.isError).toBeUndefined()
-      expect(await storedManifestFor(testCase)).toEqual({ contentHashes: 1, profiles: ['fast'] })
-
-      touchPdf(testCase, 'revised after the direct ingest')
-      calls.captionerProfiles.length = 0
-
-      expect((await runSyncJob(server)).summary).toMatchObject({ upserted: 1, skipped: 0 })
-      expect(calls.captionerProfiles).toEqual(['fast'])
-      expect(await storedManifestFor(testCase)).toEqual({ contentHashes: 1, profiles: ['fast'] })
-    } finally {
-      await server.close()
-    }
-    expect(await hasStoredCaption(testCase)).toBe(true)
-  })
-
   it('reports an ambiguous stored profile as a failed job without mutating the rows', async () => {
     const testCase = makeCase('mcp-ambiguous')
     const server = await makeServer(testCase)

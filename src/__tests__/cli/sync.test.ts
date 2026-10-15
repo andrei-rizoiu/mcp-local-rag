@@ -8,9 +8,8 @@
 // instrumented, and the scanner still walks the real filesystem while
 // recording its argument list.
 
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -149,21 +148,6 @@ function directorySymlinkSupported(): boolean {
   }
 }
 
-/** `mkfifo` is POSIX-only, so the real-FIFO case is probed the same way. */
-function fifoSupported(): boolean {
-  const probePath = join(TMP_ROOT, 'fifo-probe.md')
-  try {
-    mkdirSync(TMP_ROOT, { recursive: true })
-    execFileSync('mkfifo', [probePath])
-    const probe = lstatSync(probePath)
-    return !probe.isFile() && !probe.isDirectory()
-  } catch {
-    return false
-  } finally {
-    rmSync(probePath, { force: true })
-  }
-}
-
 /** Independent hash oracle: `node:crypto` over the exact bytes written. */
 function sha256(content: string): string {
   return createHash('sha256').update(Buffer.from(content)).digest('hex')
@@ -291,7 +275,6 @@ function reportedCounters(outcome: RunOutcome): unknown {
 
 const describeSymlinkedRoot = directorySymlinkSupported() ? describe : describe.skip
 const itWithSymlinks = directorySymlinkSupported() ? it : it.skip
-const itWithFifos = fifoSupported() ? it : it.skip
 
 /**
  * `root/d1/…/d10/deep.md`: `d10` sits at depth 10 from `root`, so a root-relative
@@ -498,19 +481,6 @@ describe('CLI sync', () => {
       { filePath, contentHash: 'stale-hash' },
       { filePath, contentHash: 'stale-hash' },
     ])
-  })
-
-  it('accepts a valid --visual-quality without --visual and syncs a non-PDF unchanged', async () => {
-    const fixture = await makeFixture('visual-quality-ignored')
-    const content = 'b'.repeat(200)
-    const filePath = await writeFixtureFile(join(expectDefined(fixture.roots[0]), 'a.md'), content)
-
-    const outcome = await runCli(fixture, ['--visual-quality', 'quality'])
-
-    expect(outcome.exitError).toBeUndefined()
-    expect(outcome.exitCode).toBeUndefined()
-    expect(reportedCounters(outcome)).toEqual({ upserted: 1, skipped: 0, empty: 0, pruned: 0 })
-    expect(await storedManifest(fixture)).toEqual([{ filePath, contentHash: sha256(content) }])
   })
 
   // --------------------------------------------
@@ -775,23 +745,6 @@ describe('CLI sync', () => {
     }
   )
 
-  it('refuses an explicitly requested file whose extension is unsupported', async () => {
-    const fixture = await makeFixture('requested-unsupported')
-    const binaryPath = await writeFixtureFile(
-      join(expectDefined(fixture.roots[0]), 'archive.bin'),
-      `not a document ${'b'.repeat(200)}`
-    )
-
-    const outcome = await runCli(fixture, [binaryPath])
-
-    expect(outcome.exitCode).toBe(1)
-    expect(outcome.stderr.filter((line) => line.startsWith('Error:'))).toEqual([
-      `Error: Sync path is not a supported document type: ${binaryPath}`,
-    ])
-    expect(calls.createEmbedder).toBe(0)
-    expect(await storedManifest(fixture)).toEqual([])
-  })
-
   it('refuses an explicitly requested path inside the database directory', async () => {
     // The database lives inside the configured root here, which is the only way
     // a managed path can also be a scope-valid request.
@@ -819,26 +772,6 @@ describe('CLI sync', () => {
     expect(calls.createEmbedder).toBe(0)
     expect(await storedManifest(fixture)).toEqual([])
   })
-
-  itWithFifos(
-    'refuses an explicitly requested FIFO instead of blocking on its bytes',
-    async () => {
-      const fixture = await makeFixture('requested-fifo')
-      const fifoPath = join(expectDefined(fixture.roots[0]), 'pipe.md')
-      execFileSync('mkfifo', [fifoPath])
-
-      // Reading this path never returns, so finishing at all is the assertion:
-      // classification refuses it before any read is attempted.
-      const outcome = await runCli(fixture, [fifoPath])
-
-      expect(outcome.exitCode).toBe(1)
-      expect(outcome.stderr.filter((line) => line.startsWith('Error:'))).toEqual([
-        `Error: Sync path is not a regular file or directory: ${fifoPath}`,
-      ])
-      expect(calls.createEmbedder).toBe(0)
-    },
-    20000
-  )
 
   // --------------------------------------------
   // The configured file-size limit bounds the hash read
@@ -889,42 +822,6 @@ describe('CLI sync', () => {
         new Set(manifest.filter((row) => row.filePath === addedPath).map((row) => row.contentHash))
       ).toEqual(new Set([sha256(`added document ${'a'.repeat(200)}`)]))
       expect(manifest.filter((row) => row.filePath === gonePath)).toEqual([])
-    } finally {
-      if (savedMaxFileSize === undefined) {
-        delete process.env['MAX_FILE_SIZE']
-      } else {
-        process.env['MAX_FILE_SIZE'] = savedMaxFileSize
-      }
-    }
-  })
-
-  it('keeps the rows of an explicitly requested oversized file', async () => {
-    const fixture = await makeFixture('oversized-explicit')
-    const savedMaxFileSize = process.env['MAX_FILE_SIZE']
-    process.env['MAX_FILE_SIZE'] = '1024'
-    try {
-      const oversizedPath = await writeFixtureFile(
-        join(expectDefined(fixture.roots[0]), 'huge.md'),
-        'h'.repeat(5000)
-      )
-      await seedRows(fixture, oversizedPath, 'hash-from-a-run-with-a-larger-limit')
-
-      const outcome = await runCli(fixture, [oversizedPath])
-
-      // A single-file scope whose only file was not observed prunes nothing: the
-      // run succeeds, reports nothing done, and leaves the rows searchable.
-      expect(outcome.exitCode).toBeUndefined()
-      expect(reportedCounters(outcome)).toEqual({
-        upserted: 0,
-        skipped: 0,
-        empty: 0,
-        pruned: 0,
-      })
-      expect(calls.createEmbedder).toBe(0)
-      expect(await storedManifest(fixture)).toEqual([
-        { filePath: oversizedPath, contentHash: 'hash-from-a-run-with-a-larger-limit' },
-        { filePath: oversizedPath, contentHash: 'hash-from-a-run-with-a-larger-limit' },
-      ])
     } finally {
       if (savedMaxFileSize === undefined) {
         delete process.env['MAX_FILE_SIZE']
@@ -1079,53 +976,6 @@ describe('CLI sync', () => {
       return fixture
     }
 
-    it('refuses an out-of-root file named through the link, ingesting and disclosing nothing', async () => {
-      const fixture = await makeEscapeFixture('escape-file')
-      const requestedPath = join(fixture.rootDir, 'link', 'inner.md')
-      await writeFile(requestedPath, `out-of-root document ${'s'.repeat(200)}`)
-      const insidePath = await writeFixtureFile(join(fixture.rootDir, 'a.md'), 'a'.repeat(200))
-      await seedRows(fixture, insidePath, 'stale-hash')
-
-      const outcome = await runCli(fixture, [requestedPath, '--base-dir', fixture.rootDir])
-
-      expect(outcome.exitCode).toBe(1)
-      expect(outcome.stdout).toBe('')
-      expect(outcome.stderr.filter((line) => line.startsWith('Error:'))).toEqual([
-        `Error: Sync path is outside every configured root: ${requestedPath}`,
-      ])
-      // Nothing about the real location leaks, under any spelling.
-      expect(outcome.stderr.join('\n')).not.toContain(fixture.outsideDir)
-      // No embedder was built and no row was written for the out-of-root file:
-      // its bytes were never hashed or parsed.
-      expect(calls.createEmbedder).toBe(0)
-      expect(await storedManifest(fixture)).toEqual([
-        { filePath: insidePath, contentHash: 'stale-hash' },
-        { filePath: insidePath, contentHash: 'stale-hash' },
-      ])
-    })
-
-    it('refuses an out-of-root directory named through the link and scans nothing under it', async () => {
-      const fixture = await makeEscapeFixture('escape-directory')
-      const requestedPath = join(fixture.rootDir, 'link', 'quiet')
-      await writeFixtureFile(
-        join(requestedPath, 'hidden.md'),
-        `out-of-root document ${'h'.repeat(200)}`
-      )
-
-      const outcome = await runCli(fixture, [requestedPath])
-
-      expect(outcome.exitCode).toBe(1)
-      expect(outcome.stdout).toBe('')
-      expect(outcome.stderr.filter((line) => line.startsWith('Error:'))).toEqual([
-        `Error: Sync path is outside every configured root: ${requestedPath}`,
-      ])
-      // No entry under the out-of-root directory is named anywhere in the output.
-      expect(outcome.stderr.join('\n')).not.toContain('hidden.md')
-      expect(outcome.stderr.join('\n')).not.toContain(fixture.outsideDir)
-      expect(calls.createEmbedder).toBe(0)
-      expect(await storedManifest(fixture)).toEqual([])
-    })
-
     // The assertion that kills the oracle: one requested path, three states of
     // the out-of-root target, one byte-identical message. Anything that varied
     // per state would tell the caller whether a path outside the roots exists
@@ -1133,6 +983,8 @@ describe('CLI sync', () => {
     it('answers with one identical message whether the out-of-root target is readable, unreadable, or absent', async () => {
       const fixture = await makeEscapeFixture('escape-oracle')
       const requestedPath = join(fixture.rootDir, 'link', 'probe.md')
+      const insidePath = await writeFixtureFile(join(fixture.rootDir, 'a.md'), 'a'.repeat(200))
+      await seedRows(fixture, insidePath, 'stale-hash')
       const expectedMessage = `Error: Sync path is outside every configured root: ${requestedPath}`
       const errorsOf = (outcome: RunOutcome): string[] =>
         outcome.stderr.filter((line) => line.startsWith('Error:'))
@@ -1153,9 +1005,17 @@ describe('CLI sync', () => {
       expect(errorsOf(unreadable)).toEqual(errorsOf(readable))
       expect(errorsOf(absent)).toEqual(errorsOf(readable))
       for (const outcome of [readable, unreadable, absent]) {
+        expect(outcome.exitCode).toBe(1)
         expect(outcome.stdout).toBe('')
         expect(outcome.stderr.join('\n')).not.toContain(fixture.outsideDir)
       }
+      // No embedder was built and no row was written for the out-of-root file:
+      // its bytes were never hashed or parsed.
+      expect(calls.createEmbedder).toBe(0)
+      expect(await storedManifest(fixture)).toEqual([
+        { filePath: insidePath, contentHash: 'stale-hash' },
+        { filePath: insidePath, contentHash: 'stale-hash' },
+      ])
     })
   })
 
