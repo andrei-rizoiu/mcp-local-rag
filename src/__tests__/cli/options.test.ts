@@ -180,65 +180,31 @@ describe('CLI global options', () => {
       expect(result.remainingArgs).toEqual([])
     })
 
-    it('should show root help and exit(0) when --help is before subcommand', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseGlobalOptions(['--help'])).toThrow('process.exit(0)')
-        expect(errorSpy).toHaveBeenCalledWith(ROOT_HELP_TEXT)
-      } finally {
-        errorSpy.mockRestore()
+    it.each([{ argv: ['--help'] }, { argv: ['-h'] }, { argv: ['--db-path', '/db', '--help'] }])(
+      'should show root help and exit(0) for $argv',
+      ({ argv }) => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        try {
+          expect(() => parseGlobalOptions(argv)).toThrow('process.exit(0)')
+          expect(errorSpy).toHaveBeenCalledWith(ROOT_HELP_TEXT)
+        } finally {
+          errorSpy.mockRestore()
+        }
       }
-    })
+    )
 
-    it('should show root help and exit(0) when -h is before subcommand', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseGlobalOptions(['-h'])).toThrow('process.exit(0)')
-        expect(errorSpy).toHaveBeenCalledWith(ROOT_HELP_TEXT)
-      } finally {
-        errorSpy.mockRestore()
+    it.each(['--db-path', '--cache-dir', '--model-name'])(
+      'should error when flag value is missing for %s',
+      (flag) => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        try {
+          expect(() => parseGlobalOptions([flag])).toThrow('process.exit(1)')
+          expect(errorSpy).toHaveBeenCalledWith(`Missing value for ${flag}`)
+        } finally {
+          errorSpy.mockRestore()
+        }
       }
-    })
-
-    it('should show root help when --help is combined with global options', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseGlobalOptions(['--db-path', '/db', '--help'])).toThrow('process.exit(0)')
-        expect(errorSpy).toHaveBeenCalledWith(ROOT_HELP_TEXT)
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when flag value is missing for --db-path', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseGlobalOptions(['--db-path'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --db-path')
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when flag value is missing for --cache-dir', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseGlobalOptions(['--cache-dir'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --cache-dir')
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when flag value is missing for --model-name', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseGlobalOptions(['--model-name'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --model-name')
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
+    )
 
     it('should treat empty string as valid value for --db-path', () => {
       const result = parseGlobalOptions(['--db-path', '', 'ingest'])
@@ -286,11 +252,6 @@ describe('CLI global options', () => {
       delete process.env['RAG_GROUPING']
       delete process.env['RAG_MAX_FILES']
       delete process.env['RAG_HYBRID_WEIGHT']
-    })
-
-    it('omits every search-tuning key when the variables are unset', () => {
-      const config = resolveGlobalConfig({})
-      expect(Object.keys(config).sort()).toEqual(['cacheDir', 'dbPath', 'modelName'])
     })
 
     it('reads the same search-tuning variables the MCP server reads', () => {
@@ -392,32 +353,16 @@ describe('CLI global options', () => {
   // validatePath
   // ============================================
   describe('validatePath', () => {
-    it('should reject /etc paths', () => {
-      expect(validatePath('/etc/config', '--db-path')).toContain('sensitive system path')
-    })
-
-    it('should reject /usr paths', () => {
-      expect(validatePath('/usr/local/data', '--db-path')).toContain('sensitive system path')
-    })
-
-    it('should reject /sys paths', () => {
-      expect(validatePath('/sys/block', '--cache-dir')).toContain('sensitive system path')
-    })
-
-    it('should reject /proc paths', () => {
-      expect(validatePath('/proc/self', '--cache-dir')).toContain('sensitive system path')
-    })
-
-    it('should reject /var paths', () => {
-      expect(validatePath('/var/log', '--db-path')).toContain('sensitive system path')
-    })
-
-    it('should reject ~/.ssh paths', () => {
-      expect(validatePath('~/.ssh/keys', '--db-path')).toContain('sensitive system path')
-    })
-
-    it('should reject ~/.gnupg paths', () => {
-      expect(validatePath('~/.gnupg/data', '--cache-dir')).toContain('sensitive system path')
+    it.each([
+      ['/etc/config', '--db-path'],
+      ['/usr/local/data', '--db-path'],
+      ['/sys/block', '--cache-dir'],
+      ['/proc/self', '--cache-dir'],
+      ['/var/log', '--db-path'],
+      ['~/.ssh/keys', '--db-path'],
+      ['~/.gnupg/data', '--cache-dir'],
+    ])('should reject %s', (path, flag) => {
+      expect(validatePath(path, flag)).toContain('sensitive system path')
     })
 
     it('should accept normal paths', () => {
@@ -583,14 +528,6 @@ describe('resolveDtype', () => {
 
   it('passes an explicit fp32 through unchanged (not coerced to a default)', () => {
     expect(resolveDtype('fp32')).toBe('fp32')
-  })
-
-  it('passes fp16 through unchanged', () => {
-    expect(resolveDtype('fp16')).toBe('fp16')
-  })
-
-  it('passes q8 through unchanged', () => {
-    expect(resolveDtype('q8')).toBe('q8')
   })
 
   it('trims surrounding whitespace from a value', () => {

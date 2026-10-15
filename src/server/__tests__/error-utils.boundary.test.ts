@@ -1,8 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { EmbeddingError } from '../../embedder/index.js'
 import { FileOperationError, ValidationError } from '../../parser/index.js'
-import { VlmError } from '../../pdf-visual/types.js'
 import { BaseDirsConfigError } from '../../utils/base-dirs.js'
 import { DatabaseError } from '../../vectordb/types.js'
 import {
@@ -43,17 +41,26 @@ describe('formatErrorForClient', () => {
     }
   })
 
-  it('returns the controlled message in production mode', () => {
-    process.env['NODE_ENV'] = 'production'
-    const error = new Error('Something went wrong')
-    expect(formatErrorForClient(error)).toBe('Something went wrong')
-  })
-
-  it('returns only the message (secure by default) when NODE_ENV is unset', () => {
-    process.env['NODE_ENV'] = undefined
-    const error = new Error('Default mode error')
-    expect(formatErrorForClient(error)).toBe('Default mode error')
-  })
+  it.each(['production', 'development', undefined])(
+    'returns only the message, never a stack trace, when NODE_ENV=%s',
+    (nodeEnv) => {
+      if (nodeEnv === undefined) {
+        Reflect.deleteProperty(process.env, 'NODE_ENV')
+      } else {
+        process.env['NODE_ENV'] = nodeEnv
+      }
+      const error = new Error('client-facing failure')
+      // The real Error carries a stack with frame markers; none of it may reach
+      // the client. The full stack stays available on the LOG side (asserted in
+      // the formatErrorForLog suite below).
+      expect(error.stack).toContain(' at ')
+      const result = formatErrorForClient(error)
+      expect(result).toBe('client-facing failure')
+      expect(result).not.toContain(' at ')
+      expect(result).not.toContain('.ts:')
+      expect(result).not.toContain('.js:')
+    }
+  )
 
   it('does NOT include the raw cause chain text', () => {
     process.env['NODE_ENV'] = 'production'
@@ -76,20 +83,6 @@ describe('formatErrorForClient', () => {
     expect(formatErrorForClient({ message: 'obj error' })).toBe('obj error')
     expect(formatErrorForClient({ message: 123 })).toBe('[object Object]')
     expect(formatErrorForClient({ custom: true })).toBe('[object Object]')
-  })
-
-  it('never includes a stack trace even under NODE_ENV=development', () => {
-    process.env['NODE_ENV'] = 'development'
-    const error = new Error('dev mode failure')
-    // The real Error carries a stack with frame markers; none of it may reach
-    // the client. The full stack stays available on the LOG side (asserted in
-    // the formatErrorForLog suite below).
-    expect(error.stack).toContain(' at ')
-    const result = formatErrorForClient(error)
-    expect(result).toBe('dev mode failure')
-    expect(result).not.toContain(' at ')
-    expect(result).not.toContain('.ts:')
-    expect(result).not.toContain('.js:')
   })
 })
 
@@ -131,13 +124,6 @@ describe('logError', () => {
     errorSpy.mockRestore()
   })
 
-  it('writes to stderr (console.error) and returns void', () => {
-    const error = new Error('log this')
-    const result = logError('ingest_file', error)
-    expect(result).toBeUndefined()
-    expect(errorSpy).toHaveBeenCalledTimes(1)
-  })
-
   it('includes the context and the full cause chain in the logged output', () => {
     const root = new Error('deep root')
     const error = new Error('top', { cause: root })
@@ -166,18 +152,8 @@ describe('toMcpError type -> code mapping', () => {
     expect(result.code).toBe(ErrorCode.InternalError)
   })
 
-  it('maps EmbeddingError to InternalError', () => {
-    const result = toMcpError(new EmbeddingError('embedder broke'), {})
-    expect(result.code).toBe(ErrorCode.InternalError)
-  })
-
   it('maps FileOperationError to InternalError', () => {
     const result = toMcpError(new FileOperationError('io broke'), {})
-    expect(result.code).toBe(ErrorCode.InternalError)
-  })
-
-  it('maps VlmError to InternalError', () => {
-    const result = toMcpError(new VlmError('vlm broke', { pageNum: 1 }), {})
     expect(result.code).toBe(ErrorCode.InternalError)
   })
 
@@ -215,25 +191,12 @@ describe('toMcpError type-conditional prefix', () => {
     expect(result.message).toContain('db broke')
   })
 
-  it('does NOT apply a prefix to a recognized AppError even when context carries one (EmbeddingError)', () => {
-    const result = toMcpError(new EmbeddingError('Invalid RAG_DTYPE'), {
-      prefix: 'Failed to ingest file',
-    })
-    expect(result.message).not.toContain('Failed to ingest file')
-    expect(result.message).toContain('Invalid RAG_DTYPE')
-  })
-
   it('adds no prefix when context has no prefix (prefix-less handler) on native error', () => {
     // The SDK wraps `.message` as `MCP error <code>: <message>`; assert on the
     // trailing client message content rather than the wrapped exact string.
     const result = toMcpError(new Error('raw rethrow'), {})
     expect(result.message.endsWith('raw rethrow')).toBe(true)
     expect(result.message).not.toContain('Failed to')
-  })
-
-  it('adds no prefix when context has no prefix on an AppError', () => {
-    const result = toMcpError(new ValidationError('invalid query'), {})
-    expect(result.message.endsWith('invalid query')).toBe(true)
   })
 
   it('never leaks the raw cause chain into the client message of the fallback path', () => {

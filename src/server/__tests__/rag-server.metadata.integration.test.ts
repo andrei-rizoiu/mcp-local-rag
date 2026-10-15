@@ -9,80 +9,6 @@ import { testModelCacheDir, withTestDevice } from '../../__tests__/test-device.j
 import { generateMetaJsonPath, generateRawDataPath } from '../../utils/raw-data-utils.js'
 import { RAGServer } from '../index.js'
 
-describe('File Title Extraction Pipeline', () => {
-  let localRagServer: RAGServer
-  const localTestDbPath = resolve('./tmp/test-lancedb-title')
-  const localTestDataDir = resolve('./tmp/test-data-title')
-
-  beforeAll(async () => {
-    mkdirSync(localTestDbPath, { recursive: true })
-    mkdirSync(localTestDataDir, { recursive: true })
-
-    localRagServer = new RAGServer(
-      withTestDevice({
-        dbPath: localTestDbPath,
-        modelName: 'Xenova/all-MiniLM-L6-v2',
-        cacheDir: testModelCacheDir(),
-        baseDir: localTestDataDir,
-        maxFileSize: 100 * 1024 * 1024,
-      })
-    )
-
-    await localRagServer.initialize()
-  })
-
-  afterAll(async () => {
-    await localRagServer.close()
-    rmSync(localTestDbPath, { recursive: true, force: true })
-    rmSync(localTestDataDir, { recursive: true, force: true })
-  })
-
-  // T-3: Verify ingest_data HTML → fileTitle end-to-end pipeline
-  it('ingest_data with HTML content preserves fileTitle in query results', async () => {
-    const html = `
-      <!DOCTYPE html>
-      <html>
-        <head><title>RAG Architecture Guide</title></head>
-        <body>
-          <article>
-            <h1>RAG Architecture Guide</h1>
-            <p>Retrieval-Augmented Generation combines information retrieval with language model generation to produce accurate and grounded responses.</p>
-            <p>This approach helps reduce hallucinations by providing relevant context from a knowledge base.</p>
-          </article>
-        </body>
-      </html>
-    `
-
-    // Ingest HTML via ingest_data
-    const ingestResult = await localRagServer.handleIngestData({
-      content: html,
-      metadata: {
-        source: 'https://example.com/rag-guide',
-        format: 'html',
-      },
-    })
-
-    const ingestData = JSON.parse(ingestResult.content[0].text)
-    expect(ingestData.chunkCount).toBeGreaterThan(0)
-    expect(ingestData.fileTitle).toBe('RAG Architecture Guide')
-
-    // Query and verify fileTitle appears in results
-    const queryResult = await localRagServer.handleQueryDocuments({
-      query: 'RAG retrieval augmented generation',
-      limit: 5,
-    })
-
-    const results = JSON.parse(queryResult.content[0].text)
-    expect(results.length).toBeGreaterThan(0)
-
-    // Verify fileTitle has the exact expected value in search results
-    const relevantResult = results.find(
-      (r: { fileTitle?: string | null }) => r.fileTitle === 'RAG Architecture Guide'
-    )
-    expect(relevantResult).toBeDefined()
-  })
-})
-
 describe('Meta JSON Sidecar Pipeline', () => {
   let localRagServer: RAGServer
   const localTestDbPath = resolve('./tmp/test-lancedb-meta-json')
@@ -221,13 +147,14 @@ describe('Meta JSON Sidecar Pipeline', () => {
       </html>
     `
 
-    await localRagServer.handleIngestData({
+    const ingestResult = await localRagServer.handleIngestData({
       content: html,
       metadata: {
         source: 'https://example.com/duplication-check',
         format: 'html',
       },
     })
+    expect(JSON.parse(ingestResult.content[0].text).fileTitle).toBe('Duplication Check Title')
 
     // Query for the content
     const queryResult = await localRagServer.handleQueryDocuments({

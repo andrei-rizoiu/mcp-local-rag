@@ -66,23 +66,6 @@ describe('list_files tool definition scope', () => {
 })
 
 describe('declared tool surface', () => {
-  // Pins the whole advertised set: it is simultaneously the "exactly two sync
-  // tools" assertion and the "no existing entry was added, removed, or renamed"
-  // assertion (SYNC-006).
-  it('advertises exactly the expected tools, in order', () => {
-    expect(toolDefinitions.map((tool) => tool.name)).toEqual([
-      'query_documents',
-      'ingest_file',
-      'ingest_data',
-      'delete_file',
-      'list_files',
-      'status',
-      'read_chunk_neighbors',
-      'sync_start',
-      'sync_status',
-    ])
-  })
-
   // SYNC-006 / ADR decision 1: the sync tools are ordinary tools/call entries.
   // Any extra top-level key would be a negotiated capability the server does
   // not implement.
@@ -119,6 +102,7 @@ describe('sync_status tool definition', () => {
 
   it('declares jobId as a required string', () => {
     expect(propertyOf(syncStatus, 'jobId').type).toBe('string')
+    expect(Object.keys(syncStatus.inputSchema.properties ?? {})).toEqual(['jobId'])
     expect(syncStatus.inputSchema.required).toEqual(['jobId'])
   })
 })

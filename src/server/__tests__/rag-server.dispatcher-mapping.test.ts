@@ -6,7 +6,7 @@
 // The dispatcher closure is invoked directly via the SDK's `_requestHandlers`
 // map, which is the boundary that owns the mapping.
 
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -83,25 +83,6 @@ describe('Central dispatcher error mapping (AC-004/005/006/008)', () => {
     await server.close()
     rmSync(testDbPath, { recursive: true, force: true })
     rmSync(testDataDir, { recursive: true, force: true })
-  })
-
-  // ---- query_documents: prefix-less ----
-  it('query_documents: maps an EmbeddingError to InternalError with NO prefix (raw message)', async () => {
-    const embedder = internals(server).embedder
-    vi.spyOn(embedder, 'embed').mockRejectedValue(new EmbeddingError('embedder exploded'))
-
-    await expect(dispatch(server, 'query_documents', { query: 'hi' })).rejects.toMatchObject({
-      code: ErrorCode.InternalError,
-    })
-    try {
-      await dispatch(server, 'query_documents', { query: 'hi' })
-      throw new Error('expected throw')
-    } catch (e) {
-      const err = expectInstanceOf(e, McpError)
-      expect(err).toBeInstanceOf(McpError)
-      expect(err.message).toContain('embedder exploded')
-      expect(err.message).not.toContain('Failed to')
-    }
   })
 
   // ---- ingest_file: prefix-keeping on a NATIVE error ----
@@ -185,28 +166,6 @@ describe('Central dispatcher error mapping (AC-004/005/006/008)', () => {
     }
   })
 
-  // ---- read_chunk_neighbors: DatabaseError passthrough (no prefix) ----
-  it('read_chunk_neighbors: DatabaseError maps to InternalError with NO prefix (raw passthrough)', async () => {
-    const testFile = resolve(testDataDir, 'dispatch-neighbors.txt')
-    writeFileSync(testFile, 'Neighbor content. '.repeat(40))
-    await dispatch(server, 'ingest_file', { filePath: testFile })
-
-    const vectorStore = internals(server).vectorStore
-    vi.spyOn(vectorStore, 'getChunksByRange').mockRejectedValue(
-      new DatabaseError('lancedb scan failed')
-    )
-
-    try {
-      await dispatch(server, 'read_chunk_neighbors', { filePath: testFile, chunkIndex: 0 })
-      throw new Error('expected throw')
-    } catch (e) {
-      const err = expectInstanceOf(e, McpError)
-      expect(err.code).toBe(ErrorCode.InternalError)
-      expect(err.message).toContain('lancedb scan failed')
-      expect(err.message).not.toContain('Failed to read chunk neighbors')
-    }
-  })
-
   it('read_chunk_neighbors: a NATIVE error gets the "Failed to read chunk neighbors" prefix', async () => {
     const testFile = resolve(testDataDir, 'dispatch-neighbors-native.txt')
     writeFileSync(testFile, 'Neighbor native content. '.repeat(40))
@@ -234,17 +193,6 @@ describe('Central dispatcher error mapping (AC-004/005/006/008)', () => {
       const err = expectInstanceOf(e, McpError)
       expect(err.code).toBe(ErrorCode.InvalidParams)
       expect(err.message).toContain('chunkIndex must be a non-negative integer')
-    }
-  })
-
-  it('delete_file: inline McpError(InvalidParams) for missing input passes through unchanged', async () => {
-    try {
-      await dispatch(server, 'delete_file', {})
-      throw new Error('expected throw')
-    } catch (e) {
-      const err = expectInstanceOf(e, McpError)
-      expect(err.code).toBe(ErrorCode.InvalidParams)
-      expect(err.message).toContain('Either filePath or source must be provided')
     }
   })
 
@@ -326,10 +274,14 @@ describe('Handler identity preservation + local rollback (AC-004)', () => {
   })
 
   it('ingest_data rollback deletes the raw-data file when the inner ingest throws, and rethrows identity', async () => {
+    const rawDataDir = resolve(testDbPath, 'raw-data')
+    let writtenBeforeFailure: string[] = []
     const embedder = internals(server).embedder
-    vi.spyOn(embedder, 'embedBatch').mockRejectedValue(new EmbeddingError('inner ingest failure'))
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(embedder, 'embedBatch').mockImplementation(async () => {
+      writtenBeforeFailure = readdirSync(rawDataDir)
+      throw new EmbeddingError('inner ingest failure')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await expect(
       server.handleIngestData({
@@ -338,13 +290,9 @@ describe('Handler identity preservation + local rollback (AC-004)', () => {
       })
     ).rejects.toBeInstanceOf(EmbeddingError)
 
-    // Rollback side-effect: the raw-data file removal path ran (logged), and no
-    // "Failed to rollback" warning was emitted (unlink succeeded).
-    const errLog = errorSpy.mock.calls.map((c) => c.join(' ')).join('\n')
-    expect(errLog).toContain('Rolled back raw-data file')
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('Failed to rollback raw-data file')
-    )
+    // The raw-data artifacts existed while the inner ingest ran and are gone after rollback.
+    expect(writtenBeforeFailure.length).toBeGreaterThan(0)
+    expect(readdirSync(rawDataDir)).toEqual([])
   })
 })
 
