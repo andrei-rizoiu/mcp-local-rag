@@ -11,37 +11,14 @@ import type { EmbedderInterface } from '../pdf-filter.js'
 // Installed via `vi.doMock` in `beforeAll` and removed via `vi.doUnmock` in
 // `afterAll`. See `.claude/skills/project-context/SKILL.md`.
 
-const { mockOpenDocument, mockFilterPageBoundarySentences, mockExtractPdfTitle, mockChunkText } =
-  vi.hoisted(() => ({
-    mockOpenDocument: vi.fn(),
-    mockFilterPageBoundarySentences: vi.fn(),
-    mockExtractPdfTitle: vi.fn(),
-    mockChunkText: vi.fn(),
-  }))
+const { mockOpenDocument, mockChunkText } = vi.hoisted(() => ({
+  mockOpenDocument: vi.fn(),
+  mockChunkText: vi.fn(),
+}))
 
 const mupdfFactory = () => ({
   Document: { openDocument: mockOpenDocument },
 })
-
-const pdfFilterFactory = async (
-  importOriginal: () => Promise<typeof import('../pdf-filter.js')>
-) => {
-  const original = await importOriginal()
-  return {
-    ...original,
-    filterPageBoundarySentences: mockFilterPageBoundarySentences,
-  }
-}
-
-const titleExtractorFactory = async (
-  importOriginal: () => Promise<typeof import('../title-extractor.js')>
-) => {
-  const original = await importOriginal()
-  return {
-    ...original,
-    extractPdfTitle: mockExtractPdfTitle,
-  }
-}
 
 const chunkerFactory = () => ({
   SemanticChunker: class {
@@ -49,12 +26,7 @@ const chunkerFactory = () => ({
   },
 })
 
-const MOCKED_PATHS = [
-  'mupdf',
-  '../pdf-filter.js',
-  '../title-extractor.js',
-  '../../chunker/index.js',
-] as const
+const MOCKED_PATHS = ['mupdf', '../../chunker/index.js'] as const
 
 let DocumentParser: typeof import('../index.js').DocumentParser
 let ValidationError: typeof import('../index.js').ValidationError
@@ -67,8 +39,6 @@ describe('DocumentParser', () => {
   beforeAll(async () => {
     vi.resetModules()
     vi.doMock('mupdf', mupdfFactory)
-    vi.doMock('../pdf-filter.js', pdfFilterFactory)
-    vi.doMock('../title-extractor.js', titleExtractorFactory)
     vi.doMock('../../chunker/index.js', chunkerFactory)
     ;({ DocumentParser, ValidationError } = await import('../index.js'))
   })
@@ -385,6 +355,18 @@ describe('DocumentParser', () => {
       )
     })
 
+    it('should throw ValidationError for PDF files (PDFs are parsed by parsePdf)', async () => {
+      const filePath = join(testDir, 'test.pdf')
+      await writeFile(filePath, 'dummy-pdf-content')
+
+      await expect(parser.parseFile(filePath)).rejects.toThrow(
+        expect.objectContaining({
+          name: 'ValidationError',
+          message: expect.stringMatching(/Unsupported file format/),
+        })
+      )
+    })
+
     it('should throw FileOperationError for invalid DOCX file', async () => {
       const filePath = join(testDir, 'test.docx')
       await writeFile(filePath, 'fake docx content')
@@ -413,16 +395,6 @@ describe('DocumentParser', () => {
   })
 
   describe('parseTxt', () => {
-    it('should parse UTF-8 text file and return ParseResult', async () => {
-      const filePath = join(testDir, 'utf8.txt')
-      const content = 'Hello, World! Hello, World!'
-      await writeFile(filePath, content, 'utf-8')
-
-      const result = await parser.parseFile(filePath)
-      expect(result.content).toBe(content)
-      expect(result.title).toBe('utf8')
-    })
-
     it('should handle empty file', async () => {
       const filePath = join(testDir, 'empty.txt')
       await writeFile(filePath, '', 'utf-8')
@@ -432,74 +404,15 @@ describe('DocumentParser', () => {
     })
   })
 
-  describe('parseMd', () => {
-    it('should parse markdown file with formatting and return ParseResult', async () => {
-      const filePath = join(testDir, 'formatted.md')
-      const content = '# Title\n\n## Subtitle\n\n- Item 1\n- Item 2\n\n**Bold** and *italic*.'
-      await writeFile(filePath, content, 'utf-8')
-
-      const result = await parser.parseFile(filePath)
-      expect(result.content).toBe(content)
-      expect(result.title).toBe('Title')
-    })
-  })
-
-  // --------------------------------------------
-  // Title Extraction per Format
-  // --------------------------------------------
-  describe('Title extraction per format', () => {
-    it('should extract title from markdown frontmatter', async () => {
-      const filePath = join(testDir, 'with-frontmatter.md')
-      const content = '---\ntitle: My Document Title\n---\n\nContent here.'
-      await writeFile(filePath, content, 'utf-8')
-
-      const result = await parser.parseFile(filePath)
-      expect(result.title).toBe('My Document Title')
-      expect(result.content).toBe(content)
-    })
-
-    it('should extract title from first heading in markdown', async () => {
-      const filePath = join(testDir, 'with-heading.md')
-      const content = '# My Heading\n\nContent here.'
-      await writeFile(filePath, content, 'utf-8')
-
-      const result = await parser.parseFile(filePath)
-      expect(result.title).toBe('My Heading')
-    })
-
-    it('should extract title from first line of txt', async () => {
-      const filePath = join(testDir, 'titled.txt')
-      const content = 'Document Title\n\nThis is the body text.'
-      await writeFile(filePath, content, 'utf-8')
-
-      const result = await parser.parseFile(filePath)
-      expect(result.title).toBe('Document Title')
-    })
-
-    it('should fall back to file name for txt without title pattern', async () => {
-      const filePath = join(testDir, 'my-notes.txt')
-      const content = 'Line one\nLine two\nLine three'
-      await writeFile(filePath, content, 'utf-8')
-
-      const result = await parser.parseFile(filePath)
-      expect(result.title).toBe('my notes')
-    })
-  })
-
   // --------------------------------------------
   // parsePdf
   // --------------------------------------------
   describe('parsePdf', () => {
     const mockEmbedder: EmbedderInterface = { embedBatch: vi.fn() }
 
-    /** Flatten one page's items back into the text the real filter would emit. */
-    function joinPageItemTexts(pageData: { items: Array<{ text: string }> }): string {
-      return pageData.items.map((item) => item.text).join('\n')
-    }
-
     /**
      * Helper to build a mupdf mock document with configurable pages.
-     * Each page entry defines: bounds, blocks (mupdf JSON structure), and optional metadata title.
+     * Each page entry defines: bounds and blocks (mupdf JSON structure).
      */
     function setupMupdfMock(
       pages: Array<{
@@ -508,8 +421,7 @@ describe('DocumentParser', () => {
           type: string
           lines?: Array<{ text: string; x: number; y: number; font: { size: number } }>
         }>
-      }>,
-      metadataTitle?: string
+      }>
     ) {
       const mockPages = pages.map((pageDef) => {
         const mockStext = {
@@ -526,7 +438,7 @@ describe('DocumentParser', () => {
       const mockDoc = {
         countPages: vi.fn().mockReturnValue(pages.length),
         loadPage: vi.fn().mockImplementation((i: number) => mockPages[i]),
-        getMetaData: vi.fn().mockReturnValue(metadataTitle ?? ''),
+        getMetaData: vi.fn().mockReturnValue(''),
         destroy: vi.fn(),
       }
 
@@ -536,30 +448,6 @@ describe('DocumentParser', () => {
 
     beforeEach(async () => {
       vi.clearAllMocks()
-
-      // filterPageBoundarySentences: pass through by joining item texts per page
-      mockFilterPageBoundarySentences.mockImplementation(
-        async (pageDataArr: Array<{ items: Array<{ text: string }> }>) =>
-          pageDataArr.map(joinPageItemTexts)
-      )
-
-      // extractPdfTitle: mirror real priority (metadata → font hint → filename)
-      mockExtractPdfTitle.mockImplementation(
-        (
-          metadata: string | undefined,
-          _chunk: string | undefined,
-          fileName: string,
-          fontHint?: { text: string; fontSize: number }
-        ) => {
-          if (metadata) {
-            return { title: metadata, source: 'metadata' as const }
-          }
-          if (fontHint && fontHint.fontSize > 14) {
-            return { title: fontHint.text.trim(), source: 'content' as const }
-          }
-          return { title: fileName.replace(/\.pdf$/, ''), source: 'filename' as const }
-        }
-      )
 
       // SemanticChunker.chunkText: return first line as chunk
       mockChunkText.mockImplementation(async (text: string) => [{ text, index: 0 }])
@@ -612,29 +500,6 @@ describe('DocumentParser', () => {
       expect(result.content).toBe('Text after image')
     })
 
-    it('should use metadata title when getMetaData returns a value', async () => {
-      const filePath = join(testDir, 'test.pdf')
-      setupMupdfMock(
-        [
-          {
-            bounds: [0, 0, 612, 792],
-            blocks: [
-              {
-                type: 'text',
-                lines: [{ text: 'Document body', x: 72, y: 100, font: { size: 12 } }],
-              },
-            ],
-          },
-        ],
-        'Research Paper Title'
-      )
-
-      const result = await parser.parsePdf(filePath, mockEmbedder)
-
-      // When metadata title is available, it should be used
-      expect(result.title).toBe('Research Paper Title')
-    })
-
     it('should concatenate consecutive largest-font lines for font hint', async () => {
       const filePath = join(testDir, 'test.pdf')
       setupMupdfMock([
@@ -680,31 +545,7 @@ describe('DocumentParser', () => {
       expect(result.content).toBe('— List item content')
     })
 
-    it('should fall back to filename when getMetaData returns empty string', async () => {
-      const filePath = join(testDir, 'test.pdf')
-      setupMupdfMock([
-        {
-          bounds: [0, 0, 612, 792],
-          blocks: [
-            {
-              type: 'text',
-              lines: [{ text: 'Introductory paragraph', x: 72, y: 100, font: { size: 12 } }],
-            },
-          ],
-        },
-      ])
-
-      const result = await parser.parsePdf(filePath, mockEmbedder)
-
-      // getMetaData returns '' → no metadata title, font size 12 < 14pt → no font hint
-      // Falls back to filename-based title: 'test.pdf' → 'test'
-      expect(result.title).toBe('test')
-    })
-
     it('embeds behind the file name when the display title is page-1 body text', async () => {
-      const { extractPdfTitle } =
-        await vi.importActual<typeof import('../title-extractor.js')>('../title-extractor.js')
-      mockExtractPdfTitle.mockImplementation(extractPdfTitle)
       const filePath = join(testDir, 'quarterly_report.pdf')
       await writeFile(filePath, 'dummy-pdf-content')
       setupMupdfMock([

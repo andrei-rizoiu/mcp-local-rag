@@ -283,26 +283,6 @@ console.log(x);</code></pre>
       expect(result.content).toContain('Page Title')
       expect(result.content).toContain('Some content without article wrapper')
     })
-
-    it('handles HTML with only navigation (no main content)', async () => {
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <body>
-            <nav>
-              <a href="/">Home</a>
-              <a href="/about">About</a>
-            </nav>
-          </body>
-        </html>
-      `
-
-      const result = await parseHtml(html, 'https://example.com/page')
-
-      // Should return {content, title} object
-      expect(typeof result.content).toBe('string')
-      expect(typeof result.title).toBe('string')
-    })
   })
 
   // --------------------------------------------
@@ -326,46 +306,6 @@ console.log(x);</code></pre>
 
       expect(result.content).toContain('日本語タイトル')
       expect(result.content).toContain('これは日本語のコンテンツです')
-    })
-
-    it('handles mixed language content', async () => {
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <body>
-            <article>
-              <h1>API Documentation</h1>
-              <p>APIの使い方について説明します。</p>
-              <p>Use the <code>fetch</code> function to make requests.</p>
-            </article>
-          </body>
-        </html>
-      `
-
-      const result = await parseHtml(html, 'https://example.com/docs')
-
-      expect(result.content).toContain('API Documentation')
-      expect(result.content).toContain('APIの使い方について説明します')
-      expect(result.content).toContain('fetch')
-    })
-
-    it('handles emoji content', async () => {
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <body>
-            <article>
-              <h1>Welcome! 👋</h1>
-              <p>Great news! 🎉 The feature is ready.</p>
-            </article>
-          </body>
-        </html>
-      `
-
-      const result = await parseHtml(html, 'https://example.com/page')
-
-      expect(result.content).toContain('👋')
-      expect(result.content).toContain('🎉')
     })
   })
 

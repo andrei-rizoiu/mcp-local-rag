@@ -123,9 +123,9 @@ function buildPng(width: number, height: number): Uint8Array {
 }
 
 /**
- * Single-page PDF that satisfies both cases: body text well above the
- * chunker's `minChunkLength`, so the text-only fallback still emits a chunk,
- * and an embedded raster so `detectVisualRegions` marks the page a candidate.
+ * Single-page PDF with body text well above the chunker's `minChunkLength`, so
+ * the page text emits a chunk, and an embedded raster so `detectVisualRegions`
+ * marks the page a candidate.
  *
  * ASCII only, so no PDF-literal escaping is needed.
  */
@@ -229,8 +229,6 @@ describe.skipIf(!E2E_ENABLED)('VLM PDF Enrichment - service-integration-e2e (RUN
     mkdirSync(testBaseDir, { recursive: true })
     mkdirSync(testDbPath, { recursive: true })
     // Synthesized in-memory so the suite is portable across clean checkouts.
-    // Figure-bearing AND text-rich, so it satisfies both the visual-marker case
-    // and the text-only fallback.
     writeFileSync(fixturePdf, buildFixturePdfBytes())
   }, E2E_TIMEOUT_MS)
 
@@ -238,9 +236,6 @@ describe.skipIf(!E2E_ENABLED)('VLM PDF Enrichment - service-integration-e2e (RUN
     rmSync(testBaseDir, { recursive: true, force: true })
     rmSync(testDbPath, { recursive: true, force: true })
     // Keep `testCacheDir` to preserve the pre-cached model across runs.
-    if (process.env['RUN_E2E_KEEP_CACHE'] !== '1' && testCacheDir !== DEFAULT_CACHE_DIR) {
-      rmSync(testCacheDir, { recursive: true, force: true })
-    }
   })
 
   // Drives the published binary (`node dist/index.js`) over real JSON-RPC on

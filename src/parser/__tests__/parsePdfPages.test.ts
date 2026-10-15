@@ -12,26 +12,15 @@ import type { EmbedderInterface } from '../pdf-filter.js'
 // Installed via `vi.doMock` in `beforeAll` and removed via `vi.doUnmock` in
 // `afterAll`. See `.claude/skills/project-context/SKILL.md`.
 
-const { mockOpenDocument, mockFilterPageBoundarySentences } = vi.hoisted(() => ({
+const { mockOpenDocument } = vi.hoisted(() => ({
   mockOpenDocument: vi.fn(),
-  mockFilterPageBoundarySentences: vi.fn(),
 }))
 
 const mupdfFactory = () => ({
   Document: { openDocument: mockOpenDocument },
 })
 
-const pdfFilterFactory = async (
-  importOriginal: () => Promise<typeof import('../pdf-filter.js')>
-) => {
-  const original = await importOriginal()
-  return {
-    ...original,
-    filterPageBoundarySentences: mockFilterPageBoundarySentences,
-  }
-}
-
-const MOCKED_PATHS = ['mupdf', '../pdf-filter.js'] as const
+const MOCKED_PATHS = ['mupdf'] as const
 
 let DocumentParser: typeof import('../index.js').DocumentParser
 
@@ -73,7 +62,6 @@ describe('parsePdfPages return shape', () => {
   beforeAll(async () => {
     vi.resetModules()
     vi.doMock('mupdf', mupdfFactory)
-    vi.doMock('../pdf-filter.js', pdfFilterFactory)
     ;({ DocumentParser } = await import('../index.js'))
   })
 
@@ -92,13 +80,6 @@ describe('parsePdfPages return shape', () => {
       baseDir: testDir,
       maxFileSize,
     })
-
-    // Pass-through filter: join each page's item texts so per-page `text`
-    // becomes deterministic without exercising the real semantic filter.
-    mockFilterPageBoundarySentences.mockImplementation(
-      async (pageDataArr: Array<{ items: Array<{ text: string }> }>) =>
-        pageDataArr.map((p) => p.items.map((item) => item.text).join('\n'))
-    )
 
     // Dummy PDF file to satisfy validateFilePath + validateFileSize.
     await writeFile(join(testDir, 'test.pdf'), 'dummy-pdf-content')

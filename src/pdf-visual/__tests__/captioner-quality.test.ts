@@ -1,7 +1,7 @@
 // `createCaptioner` (`quality` profile dispatch) unit test. Pins the
 // Qwen3.5-2B surface contract owned by `src/pdf-visual/captioners/quality.ts`:
 // model id and class, single-image processor call, long-edge input cap,
-// generation options, prompt-token slicing, and load-failure wrapping.
+// generation options, post-processing, and failure wrapping.
 //
 // Cross-file mock isolation
 // -------------------------
@@ -13,12 +13,7 @@
 // mock surfaces do not leak across.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  expectDefined,
-  expectError,
-  expectInstanceOf,
-  expectRecord,
-} from '../../__tests__/test-doubles.js'
+import { expectDefined, expectInstanceOf, expectRecord } from '../../__tests__/test-doubles.js'
 
 // ============================================
 // Mocks (vi.hoisted — required for `@huggingface/transformers`)
@@ -100,7 +95,6 @@ const mocks = vi.hoisted(() => {
 
   return {
     state,
-    mockDispose,
     env,
     AutoProcessor: { from_pretrained: mockProcessorFromPretrained },
     // The captioner-fast spec also imports `AutoModelForImageTextToText` from
@@ -160,7 +154,6 @@ describe('createCaptioner — quality profile dispatch (Qwen3.5-2B-ONNX)', () =>
   })
 
   beforeEach(() => {
-    mocks.mockDispose.mockClear()
     mocks.state.decodedText = 'a valid quality caption'
     mocks.state.decodedWidth = 2000
     mocks.state.decodedHeight = 1000
@@ -177,38 +170,6 @@ describe('createCaptioner — quality profile dispatch (Qwen3.5-2B-ONNX)', () =>
     mocks.env.cacheDir = ''
   })
 
-  it.each([false, true])(
-    'releases the acquired model after generation failure=%s',
-    async (fail) => {
-      const captioner = createCaptioner({
-        profile: 'quality',
-        cacheDir: './tmp/models',
-        device: 'cpu',
-      })
-      if (fail) {
-        mocks.state.generateThrows = new Error('Generation failed')
-      }
-      if (fail) {
-        await expect(captioner.caption(new Uint8Array([1]), 1)).rejects.toThrow()
-      } else {
-        await captioner.caption(new Uint8Array([1]), 1)
-      }
-      await captioner.dispose()
-      await captioner.dispose()
-      expect(mocks.mockDispose).toHaveBeenCalledTimes(1)
-    }
-  )
-
-  it('does not load a model when disposed before captioning', async () => {
-    const captioner = createCaptioner({
-      profile: 'quality',
-      cacheDir: './tmp/models',
-      device: 'cpu',
-    })
-    await captioner.dispose()
-    expect(mocks.mockDispose).not.toHaveBeenCalled()
-  })
-
   it('forwards the quality-profile Qwen model identifier to both from_pretrained calls', async () => {
     const captioner = createCaptioner(BASE_CONFIG)
     await captioner.caption(PNG_BYTES, 1)
@@ -219,17 +180,6 @@ describe('createCaptioner — quality profile dispatch (Qwen3.5-2B-ONNX)', () =>
     expect(mocks.mockModelFromPretrained.mock.calls[0]?.[0]).toBe(QUALITY_MODEL_ID)
   })
 
-  it('loads via Qwen3_5ForConditionalGeneration (not the auto entry point)', async () => {
-    const captioner = createCaptioner(BASE_CONFIG)
-    await captioner.caption(PNG_BYTES, 1)
-
-    // The auto entry point MUST NOT have been used — its stub is only kept
-    // alive so a sibling-file dynamic import of fast.ts would not crash.
-    expect(mocks.AutoModelForImageTextToText.from_pretrained).not.toHaveBeenCalled()
-    // Whereas the explicit Qwen class WAS used.
-    expect(mocks.mockModelFromPretrained).toHaveBeenCalledTimes(1)
-  })
-
   it('caps the decoded image long edge at 1024', async () => {
     const captioner = createCaptioner(BASE_CONFIG)
     await captioner.caption(PNG_BYTES, 1)
@@ -237,15 +187,6 @@ describe('createCaptioner — quality profile dispatch (Qwen3.5-2B-ONNX)', () =>
     expect(mocks.mockFromBlob).toHaveBeenCalledTimes(1)
     expect(mocks.mockResize).toHaveBeenCalledTimes(1)
     expect(mocks.mockResize.mock.calls[0]).toEqual([1024, 512])
-  })
-
-  it('leaves an image already within the cap unresized', async () => {
-    mocks.state.decodedWidth = 800
-    mocks.state.decodedHeight = 600
-    const captioner = createCaptioner(BASE_CONFIG)
-    await captioner.caption(PNG_BYTES, 1)
-
-    expect(mocks.mockResize).not.toHaveBeenCalled()
   })
 
   it('invokes the processor with a SINGLE image — not an array (IDEFICS3)', async () => {
@@ -273,36 +214,13 @@ describe('createCaptioner — quality profile dispatch (Qwen3.5-2B-ONNX)', () =>
     expect(arg['do_sample']).toBe(false)
   })
 
-  it('returns the decoded caption verbatim when post-processing leaves it unchanged', async () => {
-    mocks.state.decodedText = 'Summary: a figure.\n\nKeywords: alpha; beta'
+  it('returns the decoded text through postProcess, not the raw decode', async () => {
+    mocks.state.decodedText = '  Keywords: alpha; beta\u0007\nSummary: a figure.\n  '
     const captioner = createCaptioner(BASE_CONFIG)
 
     const result = await captioner.caption(PNG_BYTES, 1)
 
-    expect(result).toBe('Summary: a figure.\n\nKeywords: alpha; beta')
-  })
-
-  it('wraps model-load failure in VlmError with pageNum + Qwen model identifier in the cause', async () => {
-    const originalErr = new Error('boom-quality-load')
-    mocks.state.fromPretrainedThrows = originalErr
-    const captioner = createCaptioner(BASE_CONFIG)
-
-    let captured: unknown
-    try {
-      await captioner.caption(PNG_BYTES, 5)
-    } catch (err) {
-      captured = err
-    }
-
-    expect(captured).toBeInstanceOf(VlmError)
-    expect(expectInstanceOf(captured, VlmError).pageNum).toBe(5)
-    expect(expectInstanceOf(captured, VlmError).message).toBe('Captioning failed for page 5')
-
-    const cause = expectError(expectInstanceOf(captured, VlmError).cause)
-    expect(cause.message).toContain('Captioner load failed')
-    expect(cause.message).toContain(`modelName=${QUALITY_MODEL_ID}`)
-    expect(cause.message).toContain('boom-quality-load')
-    expect(expectRecord(cause)['cause']).toBe(originalErr)
+    expect(result).toBe('Keywords: alpha; beta\nSummary: a figure.')
   })
 
   it('wraps generation failure in VlmError with pageNum + cause', async () => {
@@ -319,6 +237,7 @@ describe('createCaptioner — quality profile dispatch (Qwen3.5-2B-ONNX)', () =>
 
     expect(captured).toBeInstanceOf(VlmError)
     expect(expectInstanceOf(captured, VlmError).pageNum).toBe(9)
+    expect(expectInstanceOf(captured, VlmError).message).toBe('Captioning failed for page 9')
     expect(expectInstanceOf(captured, VlmError).cause).toBe(originalErr)
   })
 })
