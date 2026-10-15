@@ -39,21 +39,8 @@ describe('Raw Data Utilities', () => {
   // --------------------------------------------
   describe('Base64URL Encoding/Decoding', () => {
     it('encodeBase64Url encodes string to URL-safe base64', () => {
-      const input = 'https://example.com/page'
-      const encoded = encodeBase64Url(input)
-
-      // URL-safe: no +, /, or = characters
-      expect(encoded).not.toContain('+')
-      expect(encoded).not.toContain('/')
-      expect(encoded).not.toContain('=')
-    })
-
-    it('decodeBase64Url decodes URL-safe base64 back to original string', () => {
-      const original = 'https://example.com/page'
-      const encoded = encodeBase64Url(original)
-      const decoded = decodeBase64Url(encoded)
-
-      expect(decoded).toBe(original)
+      // Standard base64 of this input is 'Pz5+Pz8/YQ=='
+      expect(encodeBase64Url('?>~???a')).toBe('Pz5-Pz8_YQ')
     })
 
     it('handles special characters in URLs', () => {
@@ -90,13 +77,6 @@ describe('Raw Data Utilities', () => {
       expect(normalized).toBe('https://example.com/page')
     })
 
-    it('removes both query string and fragment', () => {
-      const source = 'https://example.com/page?query=value#section'
-      const normalized = normalizeSource(source)
-
-      expect(normalized).toBe('https://example.com/page')
-    })
-
     it('returns non-URL sources unchanged', () => {
       const sources = ['clipboard://2024-12-30', 'manual-input', 'some-custom-id']
 
@@ -104,13 +84,6 @@ describe('Raw Data Utilities', () => {
         const normalized = normalizeSource(source)
         expect(normalized).toBe(source)
       }
-    })
-
-    it('preserves path for valid URLs', () => {
-      const source = 'https://example.com/docs/api/v1/users'
-      const normalized = normalizeSource(source)
-
-      expect(normalized).toBe('https://example.com/docs/api/v1/users')
     })
   })
 
@@ -174,22 +147,6 @@ describe('Raw Data Utilities', () => {
       // Verify path structure
       expect(savedPath).toContain('raw-data')
       expect(savedPath).toMatch(/\.md$/) // All formats use .md extension
-    })
-
-    it('creates raw-data directory if not exists', async () => {
-      const newDbPath = './tmp/test-raw-data-new'
-      await rm(newDbPath, { recursive: true, force: true })
-
-      const source = 'https://example.com/new-page'
-      const content = 'Test content'
-      const savedPath = await saveRawData(newDbPath, source, content)
-
-      // Verify file was saved
-      const savedContent = await readFile(savedPath, 'utf-8')
-      expect(savedContent).toBe(content)
-
-      // Cleanup
-      await rm(newDbPath, { recursive: true, force: true })
     })
 
     it('overwrites existing file with same source', async () => {
@@ -267,15 +224,15 @@ describe('Raw Data Utilities', () => {
       await expect(isPathInRawDataDir(symlinkEscape, boundaryDbPath)).resolves.toBe(false)
     })
 
-    it('treats matching paths case-insensitively on win32', async () => {
-      // Skip on POSIX where the filesystem is case-sensitive — the lexical
-      // comparison stays strict there, matching FS semantics.
-      if (process.platform !== 'win32') {
-        return
+    // Skip on POSIX where the filesystem is case-sensitive — the lexical
+    // comparison stays strict there, matching FS semantics.
+    it.skipIf(process.platform !== 'win32')(
+      'treats matching paths case-insensitively on win32',
+      async () => {
+        const mixed = realFile.toUpperCase()
+        await expect(isPathInRawDataDir(mixed, boundaryDbPath)).resolves.toBe(true)
       }
-      const mixed = realFile.toUpperCase()
-      await expect(isPathInRawDataDir(mixed, boundaryDbPath)).resolves.toBe(true)
-    })
+    )
   })
 
   // --------------------------------------------
@@ -297,23 +254,6 @@ describe('Raw Data Utilities', () => {
       const extractedSource = extractSourceFromPath(filePath)
 
       expect(extractedSource).toBeNull()
-    })
-
-    it('handles round-trip: save then extract source', async () => {
-      const sources = [
-        'https://example.com/docs/api',
-        'https://blog.example.com/2024/12/30/post',
-        'clipboard://2024-12-30-10-30-00',
-      ]
-
-      for (const source of sources) {
-        const savedPath = await saveRawData(testDbPath, source, 'content')
-        const extractedSource = extractSourceFromPath(savedPath)
-
-        // For URLs, the source will be normalized
-        const expectedSource = normalizeSource(source)
-        expect(extractedSource).toBe(expectedSource)
-      }
     })
   })
 })

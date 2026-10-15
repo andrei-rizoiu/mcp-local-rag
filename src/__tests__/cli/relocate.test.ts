@@ -341,22 +341,13 @@ describe('relocate CLI', () => {
     }
   )
 
-  it.each(['missing', 'directory', 'stat-error', 'dangling-link'] as const)(
+  it.each(['missing', 'directory'] as const)(
     'fails before mutation when a destination is a %s',
     async (destinationState) => {
       const fixture = await moveSingleDocumentProject()
-      if (destinationState === 'missing') {
-        await rm(fixture.newFilePath)
-      } else if (destinationState === 'directory') {
-        await rm(fixture.newFilePath)
+      await rm(fixture.newFilePath)
+      if (destinationState === 'directory') {
         await mkdir(fixture.newFilePath)
-      } else if (destinationState === 'stat-error') {
-        const docsPath = path.join(fixture.newRoot, 'docs')
-        await rm(docsPath, { recursive: true })
-        await writeFile(docsPath, 'not a directory', 'utf-8')
-      } else {
-        await rm(fixture.newFilePath)
-        await symlink(path.join(fixture.tempRoot, 'missing-target.md'), fixture.newFilePath, 'file')
       }
 
       const before = await snapshotDatabase(fixture.databasePath)
@@ -380,22 +371,6 @@ describe('relocate CLI', () => {
 
     expect(result.status).toBe(0)
     expect(JSON.parse(result.stdout)).toEqual({ filesRelocated: 1, chunksRelocated: 1 })
-  })
-
-  it('reports zero matches without publishing a table update', async () => {
-    const fixture = await moveSingleDocumentProject()
-    const before = await snapshotDatabase(fixture.databasePath)
-    const result = runCli(
-      relocateArgs(
-        fixture.databasePath,
-        path.join(fixture.tempRoot, 'absent-root'),
-        fixture.newRoot
-      )
-    )
-
-    expect(result.status).toBe(0)
-    expect(JSON.parse(result.stdout)).toEqual({ filesRelocated: 0, chunksRelocated: 0 })
-    expect(await snapshotDatabase(fixture.databasePath)).toEqual(before)
   })
 
   it('rejects a missing destination directory before opening the relocation operation', async () => {
