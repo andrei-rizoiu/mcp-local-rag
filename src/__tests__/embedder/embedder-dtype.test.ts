@@ -1,8 +1,9 @@
-// Embedder dtype-wiring unit tests
+// Embedder dtype-wiring and init-retry unit tests
 //
 // These tests assert the dtype argument the Embedder hands to the transformers.js
-// `pipeline` call. The model load is external I/O (network/model download), so the
-// `pipeline` boundary is mocked to capture the dtype without downloading a model.
+// `pipeline` call, and that a failed lazy initialization can be retried on the
+// same instance. The model load is external I/O (network/model download), so the
+// `pipeline` boundary is mocked to control it without downloading a model.
 //
 // Mock isolation: `@huggingface/transformers` is imported by the real-pipeline
 // integration tests in `embedder.test.ts`. Under the shared module registry
@@ -90,13 +91,24 @@ describe('Embedder dtype wiring', () => {
     expect(options).toEqual(expect.objectContaining({ dtype: 'q8' }))
   })
 
-  it('passes an explicit fp32 through (not dropped) so the unset signal is distinct', async () => {
-    mocks.pipeline.mockResolvedValue(mocks.model)
-    const embedder = makeEmbedder('fp32')
+  it('retries initialization on the same instance after a failed lazy init', async () => {
+    const tokenizer = Object.assign((texts: string[]) => ({ input_ids: texts.map(() => [1]) }), {
+      model_max_length: 512,
+    })
+    const loadedPipeline = Object.assign(
+      async (texts: string[]) => ({
+        data: Float32Array.from([0.25, 0.5, 0.75]),
+        dims: [texts.length, 3],
+      }),
+      { tokenizer }
+    )
+    mocks.pipeline
+      .mockRejectedValueOnce(new Error('transient load failure'))
+      .mockResolvedValueOnce(loadedPipeline)
+    const embedder = makeEmbedder()
 
-    await embedder.initialize()
-
-    const [, , options] = mocks.pipeline.mock.calls[0] ?? []
-    expect(options).toEqual(expect.objectContaining({ dtype: 'fp32' }))
+    await expect(embedder.embed('first')).rejects.toThrow('transient load failure')
+    await expect(embedder.embed('second')).resolves.toEqual([0.25, 0.5, 0.75])
+    expect(mocks.pipeline).toHaveBeenCalledTimes(2)
   })
 })
