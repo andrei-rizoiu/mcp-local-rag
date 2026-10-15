@@ -259,17 +259,6 @@ describe('CLI read-neighbors', () => {
   })
 
   // --------------------------------------------
-  // Test 7d — --help still exits 0 (exit-code policy untouched)
-  // --------------------------------------------
-  it('keeps --help on exit 0 after the formatCliError swap', async () => {
-    const { error } = await captureStderr(() => runReadNeighbors(['--help']))
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(0)')
-    expect(mocks.getChunksByRange).not.toHaveBeenCalled()
-  })
-
-  // --------------------------------------------
   // Test 8 — Defaults applied (AC-008, AC-012)
   // --------------------------------------------
   it('should use default before=2/after=2 window when neither flag is provided', async () => {

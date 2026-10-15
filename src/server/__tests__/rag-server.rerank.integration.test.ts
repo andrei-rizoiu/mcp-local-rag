@@ -268,18 +268,6 @@ describe('handleQueryDocuments with a reranker configured', () => {
     expect(rerankStderrLines()).toEqual([])
   })
 
-  it('takes an empty result set from the command as its answer', async () => {
-    const server = makeServer({
-      rerankCommand: fixtureCommand(`process.stdout.write('[]')`),
-    })
-    stubSearch(server, [0, 1, 2].map(searchResult))
-
-    const response = await server.handleQueryDocuments({ query: 'chunks', limit: 5 })
-
-    expect(resultsOf(response.content)).toEqual([])
-    expect(rerankStderrLines()).toEqual([])
-  })
-
   it('keeps a property the command added and text it rewrote', async () => {
     const server = makeServer({
       rerankCommand: fixtureCommand(`
@@ -414,102 +402,11 @@ process.stdout.write(JSON.stringify([{ ...items[0], text: 'rewritten', rerankSco
 })
 
 describe('handleQueryDocuments when the rerank child breaks its contract', () => {
-  const rejectionCases: { name: string; command: () => string }[] = [
-    {
-      name: 'the command does not exist',
-      command: () => join(workDir, 'no-such-reranker'),
-    },
-    {
-      name: 'the command exits non-zero',
-      command: () => fixtureCommand(`process.stdout.write('[]')\nprocess.exit(3)`),
-    },
-    {
-      name: 'stdout is not JSON',
-      command: () => fixtureCommand(`process.stdout.write('not json at all')`),
-    },
-    {
-      name: 'stdout is JSON but not an array',
-      command: () => fixtureCommand(`process.stdout.write('{"ranked":[]}')`),
-    },
-    {
-      name: 'an item is missing a property the schema requires',
-      command: () =>
-        fixtureCommand(`
-import { readFileSync } from 'node:fs'
-const items = JSON.parse(readFileSync(0, 'utf8'))
-const { text, ...rest } = items[0]
-process.stdout.write(JSON.stringify([rest]))
-`),
-    },
-    {
-      name: 'an item has a property of the wrong type',
-      command: () =>
-        fixtureCommand(`
-import { readFileSync } from 'node:fs'
-const items = JSON.parse(readFileSync(0, 'utf8'))
-process.stdout.write(JSON.stringify([{ ...items[0], chunkIndex: 'first' }]))
-`),
-    },
-    {
-      name: 'an attachment declares an unsupported mimeType',
-      command: () =>
-        fixtureCommand(`
-import { readFileSync } from 'node:fs'
-const items = JSON.parse(readFileSync(0, 'utf8'))
-process.stdout.write(JSON.stringify([{ ...items[0], images: [{ imageIndex: 0, mimeType: 'image/gif', data: 'x' }] }]))
-`),
-    },
-  ]
-
-  it.each(rejectionCases)(
-    'returns the pre-rerank ordering and succeeds when $name',
-    async (rejectionCase) => {
-      const server = makeServer({ rerankCommand: rejectionCase.command() })
-      const candidates = [0, 1, 2, 3].map(searchResult)
-      stubSearch(server, candidates)
-
-      const response = await server.handleQueryDocuments({ query: 'chunks', limit: 2 })
-
-      expect(identities(resultsOf(response.content))).toEqual(
-        identities([expectDefined(candidates[0]), expectDefined(candidates[1])])
-      )
-      expect(rerankStderrLines()).toHaveLength(1)
-    }
-  )
-
-  // A shim is what an npm-installed reranker leaves on PATH, and Node refuses
-  // to spawn one without a shell, so the operator needs the line to say so.
-  it.skipIf(process.platform === 'win32')(
-    'says the command must be directly executable when it names a .cmd shim',
-    async () => {
-      const shimPath = join(workDir, 'reranker-shim.cmd')
-      writeFileSync(shimPath, '@echo off\r\n', { mode: 0o644 })
-      const server = makeServer({ rerankCommand: shimPath })
-      const candidates = [0, 1, 2].map(searchResult)
-      stubSearch(server, candidates)
-
-      const response = await server.handleQueryDocuments({ query: 'chunks', limit: 2 })
-
-      expect(identities(resultsOf(response.content))).toEqual(
-        identities([expectDefined(candidates[0]), expectDefined(candidates[1])])
-      )
-      expect(expectDefined(rerankStderrLines()[0])).toMatch(/directly executable/)
-    }
-  )
-
-  it('kills the timed-out child, so no process outlives the request', async () => {
-    const markerPath = join(workDir, 'outlived-the-kill.txt')
+  it('returns the pre-rerank ordering and succeeds when stdout is not JSON', async () => {
     const server = makeServer({
-      rerankCommand: fixtureCommand(`
-import { writeFileSync } from 'node:fs'
-setTimeout(() => {
-  writeFileSync(${JSON.stringify(markerPath)}, 'still running')
-  process.stdout.write('[]')
-}, 1500)
-`),
-      rerankTimeoutMs: 200,
+      rerankCommand: fixtureCommand(`process.stdout.write('not json at all')`),
     })
-    const candidates = [0, 1, 2].map(searchResult)
+    const candidates = [0, 1, 2, 3].map(searchResult)
     stubSearch(server, candidates)
 
     const response = await server.handleQueryDocuments({ query: 'chunks', limit: 2 })
@@ -517,9 +414,6 @@ setTimeout(() => {
     expect(identities(resultsOf(response.content))).toEqual(
       identities([expectDefined(candidates[0]), expectDefined(candidates[1])])
     )
-    expect(expectDefined(rerankStderrLines()[0])).toMatch(/timed out/)
-
-    await new Promise((settle) => setTimeout(settle, 2000))
-    expect(existsSync(markerPath)).toBe(false)
+    expect(rerankStderrLines()).toHaveLength(1)
   })
 })

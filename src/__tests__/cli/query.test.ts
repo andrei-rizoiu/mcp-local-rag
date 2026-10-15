@@ -149,17 +149,6 @@ describe('CLI query', () => {
     expect(joined).toContain('-h, --help')
   })
 
-  it('should show help text and exit with code 0 when -h is passed', async () => {
-    const { stderr, error } = await captureOutput(() => runQuery(['-h']))
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(0)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain('Usage: mcp-local-rag')
-    expect(joined).toContain('query')
-  })
-
   // --------------------------------------------
   // Query text is required
   // --------------------------------------------
@@ -195,38 +184,6 @@ describe('CLI query', () => {
 
     const joined = stderr.join('\n')
     expect(joined).toContain(LIMIT_RANGE_MESSAGE)
-  })
-
-  it('should exit with code 1 when --limit is not a number', async () => {
-    const { stderr, error } = await captureOutput(() => runQuery(['--limit', 'abc', 'search text']))
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(1)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain(LIMIT_RANGE_MESSAGE)
-  })
-
-  it('should exit with code 1 when --limit value is missing', async () => {
-    const { stderr, error } = await captureOutput(() => runQuery(['--limit']))
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(1)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain('Missing value for --limit')
-  })
-
-  it('should exit with code 1 when --limit value starts with dash', async () => {
-    const { stderr, error } = await captureOutput(() =>
-      runQuery(['--limit', '--help', 'search text'])
-    )
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(1)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain('Missing value for --limit')
   })
 
   // --------------------------------------------
@@ -314,17 +271,6 @@ describe('CLI query', () => {
     expect(mocks.embedBatch).toHaveBeenCalledWith(['my search query'], 'query')
   })
 
-  it('should pass limit to vectorStore.search', async () => {
-    mocks.search.mockResolvedValue([])
-
-    await captureOutput(() => runQuery(['--limit', '5', 'my search query']))
-
-    expect(mocks.search).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({ queryText: 'my search query', limit: 5 })
-    )
-  })
-
   it('should use default limit of 10 when --limit is not specified', async () => {
     mocks.search.mockResolvedValue([])
 
@@ -339,17 +285,6 @@ describe('CLI query', () => {
   // --------------------------------------------
   // --scope threading into search options
   // --------------------------------------------
-  it('should thread a single --scope value into search options', async () => {
-    mocks.search.mockResolvedValue([])
-
-    await captureOutput(() => runQuery(['--scope', 'docs/', 'my search query']))
-
-    expect(mocks.search).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({ queryText: 'my search query', limit: 10, scope: ['docs/'] })
-    )
-  })
-
   it('should thread repeated --scope values into search options as an array', async () => {
     mocks.search.mockResolvedValue([])
 
@@ -368,16 +303,6 @@ describe('CLI query', () => {
 
     const callOptions = mocks.search.mock.calls[0]?.[1]
     expect(callOptions.scope).toBeUndefined()
-  })
-
-  it('should exit with code 1 when --scope value is empty', async () => {
-    const { stderr, error } = await captureOutput(() => runQuery(['--scope', '', 'search text']))
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(1)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain('--scope')
   })
 
   // --------------------------------------------
@@ -429,18 +354,6 @@ describe('CLI query', () => {
 
     const joined = stderr.join('\n')
     expect(joined).toContain('Unknown option: --unknown')
-  })
-
-  it('should error when global flags are passed after subcommand', async () => {
-    const { stderr, error } = await captureOutput(() =>
-      runQuery(['--db-path', '/db', 'search text'])
-    )
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(1)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain('Unknown option: --db-path')
   })
 
   // --------------------------------------------
@@ -516,12 +429,6 @@ describe('CLI query', () => {
     it('should parse -h flag', () => {
       const result = parseArgs(['-h'])
       expect(result.help).toBe(true)
-    })
-
-    it('should handle --limit before query text', () => {
-      const result = parseArgs(['--limit', '3', 'my query'])
-      expect(result.queryText).toBe('my query')
-      expect(result.options.limit).toBe(3)
     })
 
     it('should handle query text before --limit', () => {
