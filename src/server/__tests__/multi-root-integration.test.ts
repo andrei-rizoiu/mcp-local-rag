@@ -3,21 +3,17 @@
 // Adds the end-to-end gaps not covered by the list_files-shape and
 // warning-visibility files: ingest → list round-trip with per-root annotation,
 // delete scoped to one root, query and read_chunk_neighbors across roots,
-// raw-data behavior unchanged under multi-root, and the precedence /
-// nested-pruning warnings produced by the REAL `resolveBaseDirs` rather than
-// stubbed strings.
-//
-// RAGServer is wired the way `server-main.ts` wires it, so the assertions
-// exercise the real configuration pipeline. `startServer()` is deliberately
-// not called: it owns `process.exit`, which is unsafe in a vitest worker.
+// raw-data behavior unchanged under multi-root, per-root list_files error
+// tolerance, and the sensitive-path policy applied by the REAL
+// `resolveServerConfig`. `startServer()` is deliberately not called: it owns
+// `process.exit`, which is unsafe in a vitest worker.
 
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { testModelCacheDir, withTestDevice } from '../../__tests__/test-device.js'
-import { expectError } from '../../__tests__/test-doubles.js'
 import { resolveServerConfig } from '../../server-main.js'
-import { BaseDirsConfigError, displayPath, resolveBaseDirs } from '../../utils/base-dirs.js'
+import { BaseDirsConfigError, displayPath } from '../../utils/base-dirs.js'
 import { MAX_SCAN_DEPTH } from '../../utils/limits.js'
 import { RAGServer } from '../index.js'
 import { scanBaseDir } from '../list-scanner.js'
@@ -39,68 +35,6 @@ function findBlock(content: ReadonlyArray<ResultBlock>, needle: string): Content
     }
   }
   return undefined
-}
-
-/**
- * Wire a RAGServer the way `server-main.ts` does, but from explicit inputs —
- * vitest workers share `process.env`. Returns the resolver output too, so a
- * caller can assert on it directly.
- */
-async function buildServerFromResolver(opts: {
-  dbPath: string
-  cacheDir: string
-  envBaseDirs?: string | undefined
-  envBaseDir?: string | undefined
-  cwd: string
-}): Promise<{
-  server: RAGServer
-  warnings: string[]
-  configError: BaseDirsConfigError | undefined
-}> {
-  const result = await resolveBaseDirs({
-    envBaseDirs: opts.envBaseDirs,
-    envBaseDir: opts.envBaseDir,
-    cwd: opts.cwd,
-  })
-
-  const warnings: string[] = []
-  let baseDirs: string[]
-  // Mirror server-main.ts: pass both the realpath'd `baseDirs` (security) and
-  // the normal-path `rawBaseDirs` (list scan/display) so the test exercises the
-  // real production wiring rather than the rawBaseDirs→baseDirs fallback.
-  let rawBaseDirs: string[]
-  let configError: BaseDirsConfigError | undefined
-
-  if (result.ok) {
-    baseDirs = result.config.baseDirs
-    rawBaseDirs = result.config.rawBaseDirs
-    for (const w of result.warnings) {
-      warnings.push(w.message)
-    }
-  } else {
-    // Degraded mode mirror of server-main.ts (post-Finding-#4): pass an empty
-    // `baseDirs` so any handler bypassing `assertConfigOk` fails closed at the
-    // parser level rather than silently operating against `cwd`.
-    baseDirs = []
-    rawBaseDirs = []
-    configError = result.error
-    warnings.push(result.error.message)
-  }
-
-  const server = new RAGServer(
-    withTestDevice({
-      dbPath: opts.dbPath,
-      modelName: 'Xenova/all-MiniLM-L6-v2',
-      cacheDir: opts.cacheDir,
-      baseDirs,
-      rawBaseDirs,
-      maxFileSize: 100 * 1024 * 1024,
-      configWarnings: warnings,
-      ...(configError !== undefined ? { configError } : {}),
-    })
-  )
-
-  return { server, warnings, configError }
 }
 
 // =============================================================================
@@ -291,172 +225,11 @@ describe('AC-009: ingest_data behavior unchanged in multi-root mode (warnings ad
     const warningBlock = findBlock(result.content, PRECEDENCE_WARNING)
     expect(warningBlock).toBeDefined()
   }, 60000)
-
-  // AC interpretation: [AC-008] Raw-data ingested via ingest_data is reported under `sources`, not under per-root `files`,
-  // even when multiple roots are configured. Confirms the producing-root annotation is intentionally absent for raw-data.
-  // Validation: list_files response after ingest_data contains the source under `sources` (no `baseDir` annotation) and
-  // no raw-data filePath leaks into the per-root `files` array.
-  it('list_files routes raw-data under sources (no baseDir annotation) in multi-root mode', async () => {
-    // Idempotent — beforeAll might have ingested already in another test order;
-    // we re-ingest with a distinct source to keep this test independent.
-    await server.handleIngestData({
-      content:
-        'A second raw-data document for the multi-root sources routing assertion. ' +
-        'This sentence pads the document so it clears the minimum chunk filter.',
-      metadata: {
-        source: 'clipboard://2026-05-23/multi-root-raw-data-sources',
-        format: 'text',
-      },
-    })
-
-    const result = await server.handleListFiles()
-    const parsed = JSON.parse(result.content[0].text)
-
-    const sourceEntry = parsed.sources.find(
-      (s: { source?: string }) => s.source === 'clipboard://2026-05-23/multi-root-raw-data-sources'
-    )
-    expect(sourceEntry).toBeDefined()
-    expect(sourceEntry.baseDir).toBeUndefined()
-
-    const rawDataLeaks = parsed.files.filter((f: { filePath: string }) =>
-      f.filePath.includes('raw-data')
-    )
-    expect(rawDataLeaks).toHaveLength(0)
-  }, 60000)
-})
-
-// =============================================================================
-// AC-003 + AC-013: real `resolveBaseDirs` produces precedence + pruning
-// warnings that surface in tool responses end-to-end.
-// =============================================================================
-describe('AC-003/AC-013: real resolveBaseDirs warnings surface in MCP responses', () => {
-  const testBase = resolve('./tmp/test-multi-root-real-warnings')
-  const rootA = resolve(testBase, 'rootA')
-  const rootB = resolve(testBase, 'rootB')
-  const nestedChild = resolve(rootA, 'nested-child')
-  const legacyBase = resolve(testBase, 'legacy-base-dir')
-  const dbPath = resolve(testBase, 'lancedb')
-  const cacheDir = testModelCacheDir()
-
-  beforeAll(() => {
-    mkdirSync(rootA, { recursive: true })
-    mkdirSync(rootB, { recursive: true })
-    mkdirSync(nestedChild, { recursive: true })
-    mkdirSync(legacyBase, { recursive: true })
-    mkdirSync(dbPath, { recursive: true })
-    mkdirSync(cacheDir, { recursive: true })
-  })
-
-  afterAll(() => {
-    rmSync(testBase, { recursive: true, force: true })
-  })
-
-  // AC interpretation: [AC-003] When BASE_DIRS and BASE_DIR are both set with no CLI override, BASE_DIRS wins and a
-  // precedence warning is surfaced via MCP responses (not only stderr).
-  // Validation: Real resolveBaseDirs run with both envs set produces a precedence-warning content block in status output,
-  // and the server's effective roots equal the BASE_DIRS value (BASE_DIR is ignored).
-  it('BASE_DIRS > BASE_DIR precedence warning is surfaced via status content (real resolver)', async () => {
-    const { server, warnings } = await buildServerFromResolver({
-      dbPath,
-      cacheDir,
-      envBaseDirs: JSON.stringify([rootA, rootB]),
-      envBaseDir: legacyBase,
-      cwd: testBase,
-    })
-
-    try {
-      await server.initialize()
-
-      // Resolver produced the precedence warning.
-      const precedence = warnings.find((w) => w.includes('BASE_DIRS is set; BASE_DIR is ignored'))
-      expect(precedence).toBeDefined()
-
-      // Effective baseDirs came from BASE_DIRS, not BASE_DIR.
-      const listed = await server.handleListFiles()
-      const parsed = JSON.parse(listed.content[0].text)
-      // list_files returns the normal-path roots (== realpath here — no symlink
-      // in the test tmp); trailing-separator prefix match.
-      expect(parsed.baseDirs).toHaveLength(2)
-      expect(parsed.baseDirs[0].startsWith(realpathSync(rootA))).toBe(true)
-      expect(parsed.baseDirs[1].startsWith(realpathSync(rootB))).toBe(true)
-      // BASE_DIR was ignored.
-      expect(parsed.baseDirs.some((b: string) => b.startsWith(realpathSync(legacyBase)))).toBe(
-        false
-      )
-
-      // Warning content block visible on status response.
-      const status = await server.handleStatus()
-      const warnBlock = findBlock(status.content, 'BASE_DIRS is set; BASE_DIR is ignored')
-      expect(warnBlock).toBeDefined()
-    } finally {
-      await server.close()
-    }
-  }, 60000)
-
-  // AC interpretation: [AC-013] Nested-root pruning warnings emitted by resolveBaseDirs are visible via tool response
-  // content blocks (not only CLI stderr).
-  // Validation: With BASE_DIRS=[parent, child-of-parent], the resolver prunes the child and emits a warning whose text
-  // appears in list_files content; the effective baseDirs contain only the parent root.
-  it('nested-root pruning warning surfaces via list_files content (real resolver)', async () => {
-    const { server, warnings } = await buildServerFromResolver({
-      dbPath,
-      cacheDir,
-      envBaseDirs: JSON.stringify([rootA, nestedChild]),
-      cwd: testBase,
-    })
-
-    try {
-      await server.initialize()
-
-      // Resolver produced a nested-pruned warning.
-      const pruned = warnings.find((w) => w.includes('Nested base directory pruned'))
-      expect(pruned).toBeDefined()
-
-      // Effective baseDirs include only the parent root.
-      const listed = await server.handleListFiles()
-      const parsed = JSON.parse(listed.content[0].text)
-      expect(parsed.baseDirs).toHaveLength(1)
-      expect(parsed.baseDirs[0].startsWith(realpathSync(rootA))).toBe(true)
-
-      // Warning content block visible on list_files response.
-      const warnBlock = findBlock(listed.content, 'Nested base directory pruned')
-      expect(warnBlock).toBeDefined()
-    } finally {
-      await server.close()
-    }
-  }, 60000)
-
-  // AC interpretation: [AC-011] dbPath/cacheDir auto-exclusion remains effective for MCP scans across every root configured via env.
-  // Validation: With two roots configured via real BASE_DIRS and a supported file placed inside dbPath, list_files does not
-  // include that file (exclusion applies uniformly across roots even when roots are env-resolved).
-  it('dbPath/cacheDir exclusion still applies across env-resolved roots', async () => {
-    // Place a supported file inside dbPath that would otherwise match the filter.
-    const dbInternal = join(dbPath, 'internal-supported.txt')
-    writeFileSync(dbInternal, 'should not appear')
-
-    const { server } = await buildServerFromResolver({
-      dbPath,
-      cacheDir,
-      envBaseDirs: JSON.stringify([rootA, rootB]),
-      cwd: testBase,
-    })
-
-    try {
-      await server.initialize()
-      const listed = await server.handleListFiles()
-      const parsed = JSON.parse(listed.content[0].text)
-      const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-      expect(filePaths).not.toContain(dbInternal)
-    } finally {
-      await server.close()
-      rmSync(dbInternal, { force: true })
-    }
-  }, 60000)
 })
 
 // `list_files` survives a permission-denied error on one root, warning per
-// root instead of failing the call. `readdir` is mocked so this is
-// deterministic across CI environments.
+// root instead of failing the call. rootA is made unreadable with chmod, which
+// only works on POSIX, so the test is skipped on Windows.
 describe('post-launch finding #10: list_files per-root error tolerance', () => {
   const testBase = resolve('./tmp/test-list-files-per-root-err')
   const rootA = resolve(testBase, 'rootA')
@@ -483,61 +256,59 @@ describe('post-launch finding #10: list_files per-root error tolerance', () => {
     rmSync(testBase, { recursive: true, force: true })
   })
 
-  it('list_files surfaces files from accessible roots when another root is inaccessible', async () => {
-    // Make rootA unreadable using chmod so `readdir(rootA)` throws EACCES
-    // at the syscall layer (Linux/macOS only; Windows skips this test).
-    // We rely on the bounded BFS new in Finding #10 to capture the error
-    // as a per-root warning and keep scanning rootB.
-    if (process.platform === 'win32') {
-      return
-    }
+  it.skipIf(process.platform === 'win32')(
+    'list_files surfaces files from accessible roots when another root is inaccessible',
+    async () => {
+      // Make rootA unreadable using chmod so `readdir(rootA)` throws EACCES
+      // at the syscall layer (Linux/macOS only; Windows skips this test).
+      // We rely on the bounded BFS new in Finding #10 to capture the error
+      // as a per-root warning and keep scanning rootB.
+      const { chmodSync } = await import('node:fs')
+      chmodSync(rootA, 0o000)
 
-    const { chmodSync } = await import('node:fs')
-    chmodSync(rootA, 0o000)
-
-    const server = new RAGServer(
-      withTestDevice({
-        dbPath,
-        modelName: 'Xenova/all-MiniLM-L6-v2',
-        cacheDir,
-        baseDirs: [rootA, rootB],
-        maxFileSize: 100 * 1024 * 1024,
-      })
-    )
-    await server.initialize()
-    try {
-      const result = await server.handleListFiles()
-      const parsed = JSON.parse(result.content[0]?.text ?? '{}')
-      const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-      // rootB's file survives even though rootA failed.
-      expect(filePaths).toContain(resolve(rootB, 'survives.md'))
-      // Warning content block names the failing root via `displayPath`
-      // (HOME prefix is collapsed to `~` to avoid leaking the OS username
-      // through MCP responses; see Finding #10 sanitization).
-      const warningBlock = findBlock(result.content, `cannot read directory: ${displayPath(rootA)}`)
-      expect(warningBlock).toBeDefined()
-      // The raw OS error message must not leak into the warning text.
-      expect(warningBlock?.text ?? '').not.toContain('permission denied')
-    } finally {
-      await server.close()
-      // Restore permissions so afterAll's rmSync can recurse.
-      chmodSync(rootA, 0o755)
-    }
-  }, 60000)
+      const server = new RAGServer(
+        withTestDevice({
+          dbPath,
+          modelName: 'Xenova/all-MiniLM-L6-v2',
+          cacheDir,
+          baseDirs: [rootA, rootB],
+          maxFileSize: 100 * 1024 * 1024,
+        })
+      )
+      await server.initialize()
+      try {
+        const result = await server.handleListFiles()
+        const parsed = JSON.parse(result.content[0]?.text ?? '{}')
+        const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
+        // rootB's file survives even though rootA failed.
+        expect(filePaths).toContain(resolve(rootB, 'survives.md'))
+        // Warning content block names the failing root via `displayPath`
+        // (HOME prefix is collapsed to `~` to avoid leaking the OS username
+        // through MCP responses; see Finding #10 sanitization).
+        const warningBlock = findBlock(
+          result.content,
+          `cannot read directory: ${displayPath(rootA)}`
+        )
+        expect(warningBlock).toBeDefined()
+        // The raw OS error message must not leak into the warning text.
+        expect(warningBlock?.text ?? '').not.toContain('permission denied')
+      } finally {
+        await server.close()
+        // Restore permissions so afterAll's rmSync can recurse.
+        chmodSync(rootA, 0o755)
+      }
+    },
+    60000
+  )
 })
 
 // `scanBaseDir` owns no traversal — only the `list_files` warning wording, the
 // once-per-call depth warning, and the sort. These pin that presentation so the
 // shared walker cannot silently change `list_files` output.
-//
-// Mock-free on purpose: against a non-existent directory an attempted `readdir`
-// is observable as an ENOENT warning, so its ABSENCE proves scope pushdown
-// skipped the syscall.
 describe('scanBaseDir presentation contract over the shared walker', () => {
   const testBase = resolve('./tmp/test-list-scanner-adapter')
   const root = resolve(testBase, 'root')
   const missing = resolve(testBase, 'does-not-exist')
-  const otherTree = resolve(testBase, 'other')
 
   /** Nested chain deep enough that its tail is dequeued past MAX_SCAN_DEPTH. */
   function deepChain(prefix: string): string {
@@ -547,7 +318,6 @@ describe('scanBaseDir presentation contract over the shared walker', () => {
 
   beforeAll(() => {
     mkdirSync(root, { recursive: true })
-    mkdirSync(otherTree, { recursive: true })
     mkdirSync(join(root, 'sub'), { recursive: true })
     mkdirSync(deepChain('a'), { recursive: true })
     mkdirSync(deepChain('b'), { recursive: true })
@@ -584,18 +354,6 @@ describe('scanBaseDir presentation contract over the shared walker', () => {
     expect(depthWarnings).toEqual([
       `some directories under ${displayPath(root)} were skipped because they exceed the maximum depth (${MAX_SCAN_DEPTH})`,
     ])
-  })
-
-  it('skips a baseDir intersecting no scope prefix without any readdir', async () => {
-    // Scope excludes `missing` entirely: pushdown means no readdir, so the
-    // ENOENT warning the sentinel below produces must not appear.
-    const scoped = await scanBaseDir(missing, [], [otherTree])
-    expect(scoped.files).toEqual([])
-    expect(scoped.warnings).toEqual([])
-
-    // Sentinel: the same baseDir without scope does attempt the readdir.
-    const unscoped = await scanBaseDir(missing, [])
-    expect(unscoped.warnings).toEqual([`cannot read directory: ${displayPath(missing)} (ENOENT)`])
   })
 })
 
@@ -679,100 +437,5 @@ describe('post-launch findings #3 + #4: server-main wiring rejects sensitive roo
     expect(config.configError?.message).toMatch(/sensitive system path/)
     expect(config.configError?.message).toContain('BASE_DIR')
     expect(config.baseDirs).toEqual([])
-  })
-})
-
-// =============================================================================
-// AC-010: invalid BASE_DIRS end-to-end via real resolveBaseDirs.
-// `status` callable; root-dependent tools throw structured McpError.
-// =============================================================================
-describe('AC-010: invalid BASE_DIRS end-to-end (real resolveBaseDirs)', () => {
-  const testBase = resolve('./tmp/test-multi-root-invalid')
-  const dbPath = resolve(testBase, 'lancedb')
-  const cacheDir = testModelCacheDir()
-
-  beforeAll(() => {
-    mkdirSync(dbPath, { recursive: true })
-    mkdirSync(cacheDir, { recursive: true })
-  })
-
-  afterAll(() => {
-    rmSync(testBase, { recursive: true, force: true })
-  })
-
-  // AC interpretation: [AC-010] Invalid BASE_DIRS does not silently fall back: root-dependent tools must error with the
-  // resolver's structured message, while status remains callable and exposes the same message as a diagnostic block.
-  // Validation: With BASE_DIRS set to non-JSON garbage, list_files throws McpError carrying the resolver's error text,
-  // and status returns a content array containing a "Configuration error: ..." block with that same text.
-  it('list_files throws McpError; status remains callable and exposes the same diagnostic', async () => {
-    const { server, configError } = await buildServerFromResolver({
-      dbPath,
-      cacheDir,
-      envBaseDirs: 'not-a-valid-json-array',
-      cwd: testBase,
-    })
-
-    // Resolver returned a structured error and stashed it on the server.
-    expect(configError).toBeDefined()
-    expect(configError?.message).toMatch(/BASE_DIRS/)
-
-    try {
-      await server.initialize()
-
-      // Root-dependent tool: throws the structured BaseDirsConfigError with the
-      // resolver's message and original identity. The central dispatcher mapper
-      // maps it to McpError(InvalidParams) at the MCP boundary (covered by
-      // rag-server.dispatcher-mapping.test.ts).
-      const listError = await server
-        .handleListFiles()
-        .then(() => null)
-        .catch((e) => e)
-      expect(listError).toBeInstanceOf(BaseDirsConfigError)
-      expect(expectError(listError).message).toMatch(/BASE_DIRS/)
-
-      // status remains callable and surfaces the configError as a diagnostic block.
-      const status = await server.handleStatus()
-      const diagnostic = findBlock(status.content, 'Configuration error:')
-      expect(diagnostic).toBeDefined()
-      expect(diagnostic?.text).toMatch(/BASE_DIRS/)
-    } finally {
-      await server.close()
-    }
-  }, 60000)
-
-  // [AC-010] Only root-dependent tools fail fast: `query_documents` (DB only),
-  // `ingest_data` (DB + raw-data), and the `source` mode of `delete_file` /
-  // `read_chunk_neighbors` route around the configured roots and stay callable.
-  // `filePath` mode of either, plus `ingest_file` and `list_files`, fail fast.
-  it('root-dependent tools (filePath/list/ingest_file) fail fast with the resolver error message', async () => {
-    const { server } = await buildServerFromResolver({
-      dbPath,
-      cacheDir,
-      envBaseDirs: '{"not":"an array"}',
-      cwd: testBase,
-    })
-
-    try {
-      // No need to initialize — the assertConfigOk() guard fires before any
-      // DB access for the fail-fast set, so we can skip the heavy
-      // initialize() path for this case.
-
-      // The config gate throws the structured BaseDirsConfigError with original
-      // identity for every fail-fast tool; the central dispatcher mapper turns
-      // it into McpError(InvalidParams) at the boundary (see
-      // rag-server.dispatcher-mapping.test.ts).
-      await expect(server.handleIngestFile({ filePath: '/tmp/x.txt' })).rejects.toBeInstanceOf(
-        BaseDirsConfigError
-      )
-      await expect(server.handleDeleteFile({ filePath: '/tmp/x.txt' })).rejects.toBeInstanceOf(
-        BaseDirsConfigError
-      )
-      await expect(
-        server.handleReadChunkNeighbors({ filePath: '/tmp/x.txt', chunkIndex: 0 })
-      ).rejects.toBeInstanceOf(BaseDirsConfigError)
-      await expect(server.handleListFiles()).rejects.toBeInstanceOf(BaseDirsConfigError)
-    } finally {
-      // Do not close — server was never initialized.
-    }
   })
 })

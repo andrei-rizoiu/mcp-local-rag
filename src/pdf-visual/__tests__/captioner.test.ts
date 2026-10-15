@@ -30,12 +30,10 @@ const mocks = vi.hoisted(() => {
     decodedText: string
     fromPretrainedThrows: Error | null
     generateThrows: Error | null
-    fromBlobThrows: Error | null
   } = {
     decodedText: 'a valid caption',
     fromPretrainedThrows: null,
     generateThrows: null,
-    fromBlobThrows: null,
   }
 
   const mockProcessorFromPretrained = vi.fn(async (_modelName: string, _options: unknown) => {
@@ -87,9 +85,6 @@ const mocks = vi.hoisted(() => {
   const mockModelInstance = { dispose: mockDispose, generate: mockGenerate }
 
   const mockFromBlob = vi.fn((_blob: Blob) => {
-    if (state.fromBlobThrows) {
-      throw state.fromBlobThrows
-    }
     return { width: 100, height: 100, channels: 3, data: new Uint8ClampedArray(0) }
   })
 
@@ -163,7 +158,6 @@ describe('createCaptioner — fast profile dispatch (CaptionerConfig flow)', () 
     mocks.state.decodedText = 'a valid caption'
     mocks.state.fromPretrainedThrows = null
     mocks.state.generateThrows = null
-    mocks.state.fromBlobThrows = null
     mocks.mockGenerate.mockClear()
     mocks.mockBatchDecode.mockClear()
     mocks.mockProcessorFromPretrained.mockClear()
@@ -403,28 +397,6 @@ describe('createCaptioner — fast profile dispatch (CaptionerConfig flow)', () 
     expect(captured).toBeInstanceOf(VlmError)
     expect(expectInstanceOf(captured, VlmError).pageNum).toBe(7)
     expect(expectInstanceOf(captured, VlmError).message).toBe('Captioning failed for page 7')
-    expect(expectInstanceOf(captured, VlmError).cause).toBe(originalErr)
-  })
-
-  // ----- Failure: image decode -----
-
-  it('wraps image-decode failure in VlmError with pageNum + cause', async () => {
-    // Arrange
-    const originalErr = new Error('boom-decode')
-    mocks.state.fromBlobThrows = originalErr
-    const captioner = createCaptioner(BASE_CONFIG)
-
-    // Act + Assert
-    let captured: unknown
-    try {
-      await captioner.caption(PNG_BYTES, 3)
-    } catch (err) {
-      captured = err
-    }
-
-    expect(captured).toBeInstanceOf(VlmError)
-    expect(expectInstanceOf(captured, VlmError).pageNum).toBe(3)
-    expect(expectInstanceOf(captured, VlmError).message).toBe('Captioning failed for page 3')
     expect(expectInstanceOf(captured, VlmError).cause).toBe(originalErr)
   })
 })

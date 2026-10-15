@@ -57,11 +57,6 @@ export interface FilteredPageLayout {
 // Text Joining
 // ============================================
 
-/**
- * Join page items into text, preserving the native item stream. `hasEOL`
- * separates fragments on one native line from the next; geometry stays
- * placement metadata and is never a global reading-order comparator.
- */
 /** A fragment positioned in the untrimmed page text, before rebasing. */
 type RawFragment = Omit<FilteredTextFragment, 'text' | 'pageTextStart' | 'pageTextEnd'> & {
   rawStart: number
@@ -82,6 +77,11 @@ function beginsNewNativeBlock(
   )
 }
 
+/**
+ * Join page items into text, preserving the native item stream. `hasEOL`
+ * separates fragments on one native line from the next; geometry stays
+ * placement metadata and is never a global reading-order comparator.
+ */
 function buildPageLayout(pageNum: number, items: TextItemWithPosition[]): FilteredPageLayout {
   let rawText = ''
   let previousItem: TextItemWithPosition | undefined
@@ -228,18 +228,6 @@ function removeSourceSpans(
   }
 
   return { text, textFragments }
-}
-
-function joinPageItems(items: TextItemWithPosition[]): string {
-  return buildPageLayout(0, items).text
-}
-
-/** Join filtered pages into one text. */
-export function joinFilteredPages(pages: PageData[]): string {
-  return pages
-    .map((page) => joinPageItems(page.items))
-    .filter((text) => text.length > 0)
-    .join('\n\n')
 }
 
 // ============================================
@@ -678,20 +666,8 @@ export async function detectSentencePatterns(
 
 /**
  * Main entry point for sentence-level header/footer filtering: removes
- * repeating boundary sentences and returns one filtered text per page.
- *
- * Use this rather than {@link joinFilteredPages} when an embedder is available.
- */
-export async function filterPageBoundarySentences(
-  pages: PageData[],
-  embedder: EmbedderInterface,
-  config: Partial<SentencePatternConfig> = {}
-): Promise<string[]> {
-  return (await filterPageBoundaryLayouts(pages, embedder, config)).map((page) => page.text)
-}
-
-/**
- * Filter page boundaries while retaining native provenance for every survivor.
+ * repeating boundary sentences while retaining native provenance for every
+ * survivor.
  */
 export async function filterPageBoundaryLayouts(
   pages: PageData[],

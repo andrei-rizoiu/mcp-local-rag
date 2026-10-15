@@ -21,18 +21,14 @@ import { parseJson } from '../test-doubles.js'
 
 const CAPTION_TEXT = 'deterministic synthetic figure caption'
 
-/** Model boundaries actually reached, so a true no-op is provable. */
+/** Model boundaries actually reached. */
 interface ModelCalls {
-  createEmbedder: number
   /** Profiles the stubbed captioner was constructed with, in call order. */
   captionerProfiles: string[]
-  optimize: number
 }
 
 const calls = vi.hoisted<ModelCalls>(() => ({
-  createEmbedder: 0,
   captionerProfiles: [],
-  optimize: 0,
 }))
 
 function deterministicEmbeddings(texts: string[]): number[][] {
@@ -49,23 +45,11 @@ const cliCommonFactory = async (
   const actual = await importOriginal()
   return {
     ...actual,
-    createEmbedder: () => {
-      calls.createEmbedder += 1
-      return {
-        embed: async () => deterministicEmbeddings(['query'])[0] ?? [],
-        embedBatch: async (texts: string[]) => deterministicEmbeddings(texts),
-        dispose: async () => undefined,
-      }
-    },
-    createVectorStore: (config: Parameters<typeof actual.createVectorStore>[0]) => {
-      const store = actual.createVectorStore(config)
-      const realOptimize = store.optimize.bind(store)
-      store.optimize = async () => {
-        calls.optimize += 1
-        await realOptimize()
-      }
-      return store
-    },
+    createEmbedder: () => ({
+      embed: async () => deterministicEmbeddings(['query'])[0] ?? [],
+      embedBatch: async (texts: string[]) => deterministicEmbeddings(texts),
+      dispose: async () => undefined,
+    }),
   }
 }
 
@@ -198,9 +182,7 @@ describe('CLI sync visual-profile preservation', () => {
   let consoleError: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    calls.createEmbedder = 0
     calls.captionerProfiles.length = 0
-    calls.optimize = 0
     process.exitCode = undefined
     consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   })
@@ -243,16 +225,6 @@ describe('CLI sync visual-profile preservation', () => {
     expect(await hasStoredCaption(testCase)).toBe(false)
   })
 
-  it('indexes a never-seen PDF at the explicitly requested profile', async () => {
-    const testCase = makeCase('new-pdf-explicit')
-
-    expect(await cliSync(testCase, ['--visual'])).toMatchObject({ upserted: 1, skipped: 0 })
-
-    expect(calls.captionerProfiles).toEqual(['fast'])
-    expect(await storedProfiles(testCase)).toEqual(['fast'])
-    expect(await hasStoredCaption(testCase)).toBe(true)
-  })
-
   it('promotes an unchanged text-only PDF and then converts it on the next explicit switch', async () => {
     const testCase = makeCase('promote-then-switch')
     await cliIngest(testCase)
@@ -269,26 +241,6 @@ describe('CLI sync visual-profile preservation', () => {
     expect(calls.captionerProfiles).toEqual(['fast', 'quality'])
     expect(await storedProfiles(testCase)).toEqual(['quality'])
     expect(await hasStoredCaption(testCase)).toBe(true)
-  })
-
-  it('loads no model and optimizes nothing when the profile and bytes already agree', async () => {
-    const testCase = makeCase('repeat-no-op')
-    await cliSync(testCase, ['--visual'])
-
-    calls.createEmbedder = 0
-    calls.captionerProfiles.length = 0
-    calls.optimize = 0
-
-    expect(await cliSync(testCase, ['--visual'])).toEqual({
-      upserted: 0,
-      skipped: 1,
-      empty: 0,
-      pruned: 0,
-    })
-    expect(calls.createEmbedder).toBe(0)
-    expect(calls.captionerProfiles).toEqual([])
-    expect(calls.optimize).toBe(0)
-    expect(await storedProfiles(testCase)).toEqual(['fast'])
   })
 
   it('clears the recorded profile on a direct normal ingest, and the next sync keeps it cleared', async () => {

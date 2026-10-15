@@ -18,27 +18,15 @@ import type { EmbedderInterface } from '../pdf-filter.js'
 // Installed via `vi.doMock` in `beforeAll` and removed via `vi.doUnmock` in
 // `afterAll`. See `.claude/skills/project-context/SKILL.md`.
 
-const { mockOpenDocument, mockFilterPageBoundarySentences, mockExtractPdfTitle, mockChunkText } =
-  vi.hoisted(() => ({
-    mockOpenDocument: vi.fn(),
-    mockFilterPageBoundarySentences: vi.fn(),
-    mockExtractPdfTitle: vi.fn(),
-    mockChunkText: vi.fn(),
-  }))
+const { mockOpenDocument, mockExtractPdfTitle, mockChunkText } = vi.hoisted(() => ({
+  mockOpenDocument: vi.fn(),
+  mockExtractPdfTitle: vi.fn(),
+  mockChunkText: vi.fn(),
+}))
 
 const mupdfFactory = () => ({
   Document: { openDocument: mockOpenDocument },
 })
-
-const pdfFilterFactory = async (
-  importOriginal: () => Promise<typeof import('../pdf-filter.js')>
-) => {
-  const original = await importOriginal()
-  return {
-    ...original,
-    filterPageBoundarySentences: mockFilterPageBoundarySentences,
-  }
-}
 
 const titleExtractorFactory = async (
   importOriginal: () => Promise<typeof import('../title-extractor.js')>
@@ -56,12 +44,7 @@ const chunkerFactory = () => ({
   },
 })
 
-const MOCKED_PATHS = [
-  'mupdf',
-  '../pdf-filter.js',
-  '../title-extractor.js',
-  '../../chunker/index.js',
-] as const
+const MOCKED_PATHS = ['mupdf', '../title-extractor.js', '../../chunker/index.js'] as const
 
 let DocumentParser: typeof import('../index.js').DocumentParser
 let FileOperationError: typeof import('../index.js').FileOperationError
@@ -79,7 +62,6 @@ describe('parsePdf destroy lifecycle (AC-013)', () => {
   beforeAll(async () => {
     vi.resetModules()
     vi.doMock('mupdf', mupdfFactory)
-    vi.doMock('../pdf-filter.js', pdfFilterFactory)
     vi.doMock('../title-extractor.js', titleExtractorFactory)
     vi.doMock('../../chunker/index.js', chunkerFactory)
     ;({ DocumentParser, FileOperationError } = await import('../index.js'))
@@ -160,12 +142,6 @@ describe('parsePdf destroy lifecycle (AC-013)', () => {
       maxFileSize,
     })
 
-    // filterPageBoundarySentences: pass through (joins per-page item texts)
-    mockFilterPageBoundarySentences.mockImplementation(
-      async (pageDataArr: Array<{ items: Array<{ text: string }> }>) =>
-        pageDataArr.map((p) => p.items.map((item) => item.text).join('\n'))
-    )
-
     // extractPdfTitle: minimal — return filename-based title (sufficient for AC-013)
     mockExtractPdfTitle.mockImplementation(
       (
@@ -243,6 +219,9 @@ describe('parsePdf destroy lifecycle (AC-013)', () => {
     // The error is wrapped in FileOperationError per parsePdf's catch block;
     // assert the wrapped error preserves the original via `cause`.
     expect(thrown).toBeInstanceOf(FileOperationError)
+    expect(expectInstanceOf(thrown, FileOperationError).message).toBe(
+      `Failed to parse PDF: ${filePath}`
+    )
     expect(expectInstanceOf(thrown, FileOperationError).cause).toBe(pageLoadError)
     // AC-013 witness: destroy still called exactly once even when the per-page
     // loop threw. This is the test that would fail if T2.3's `finally` block
@@ -337,6 +316,9 @@ describe('parsePdf destroy lifecycle (AC-013)', () => {
     }
 
     expect(thrown).toBeInstanceOf(FileOperationError)
+    expect(expectInstanceOf(thrown, FileOperationError).message).toBe(
+      `Failed to parse PDF pages: ${filePath}`
+    )
     expect(expectInstanceOf(thrown, FileOperationError).cause).toBe(pageLoadError)
     expect(destroyFn).toHaveBeenCalledTimes(1)
   })

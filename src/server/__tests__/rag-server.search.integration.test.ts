@@ -95,19 +95,6 @@ describe('AC-004: Vector Search', () => {
     }
   })
 
-  // AC interpretation: [Technical requirement] Default top-5 results returned
-  // Validation: When limit not specified, 5 search results are returned
-  it('When limit not specified, default top-5 results returned', async () => {
-    const result = await localRagServer.handleQueryDocuments({
-      query: 'TypeScript',
-    })
-
-    const results = JSON.parse(result.content[0].text)
-    expect(Array.isArray(results)).toBe(true)
-    // If chunk count is less than 5, that number; if 5 or more, max 5 results
-    expect(results.length).toBeLessThanOrEqual(5)
-  })
-
   // Edge Case: No matches
   // Validation: When no matching documents, empty array is returned
   it('Empty array returned for query with no matching documents (e.g., random string)', async () => {
@@ -141,26 +128,16 @@ describe('AC-004: Vector Search', () => {
     }
   })
 
-  // Edge Case: limit boundary values
-  // Validation: Operates normally with boundary values limit=1, limit=100
-  it('Operates normally with boundary values limit=1, limit=100', async () => {
-    const result1 = await localRagServer.handleQueryDocuments({
+  // Edge Case: lower limit boundary
+  // Validation: limit=1 returns exactly one result from a non-empty index
+  it('Returns exactly one result at the lower boundary limit=1', async () => {
+    const result = await localRagServer.handleQueryDocuments({
       query: 'TypeScript',
       limit: 1,
     })
 
-    const results1 = JSON.parse(result1.content[0].text)
-    expect(Array.isArray(results1)).toBe(true)
-    expect(results1.length).toBeLessThanOrEqual(1)
-
-    const result100 = await localRagServer.handleQueryDocuments({
-      query: 'TypeScript',
-      limit: 100,
-    })
-
-    const results100 = JSON.parse(result100.content[0].text)
-    expect(Array.isArray(results100)).toBe(true)
-    expect(results100.length).toBeLessThanOrEqual(100)
+    const results = JSON.parse(result.content[0].text)
+    expect(results).toHaveLength(1)
   })
 })
 

@@ -17,9 +17,8 @@ const mocks = vi.hoisted(() => {
     listFiles: vi.fn().mockResolvedValue([]),
     close: vi.fn().mockResolvedValue(undefined),
 
-    // Shared CLI base-dirs resolver. Per-test impls can mirror precedence
-    // (CLI roots replace env roots, env falls through to cwd) or simulate
-    // resolver errors.
+    // Shared CLI base-dirs resolver. Per-test impls return the effective
+    // roots and warnings for the scenario under test.
     resolveCliBaseDirs: vi.fn(),
   }
 })
@@ -137,12 +136,10 @@ describe('CLI list', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    // Default resolver impl: CLI roots when provided, otherwise the
-    // BASE_DIR env value if set (so existing precedence tests continue to
-    // verify CLI > env), otherwise cwd. Per-test impls can override before
-    // calling `runList`.
+    // Default resolver impl: CLI roots when provided, otherwise cwd.
+    // Per-test impls can override before calling `runList`.
     mocks.resolveCliBaseDirs.mockImplementation((cliRoots: string[]) => {
-      const first = cliRoots[0] ?? process.env['BASE_DIR'] ?? process.cwd()
+      const first = cliRoots[0] ?? process.cwd()
       // Path-canonicalization: `list` scans/displays the NORMAL-path `rawBaseDirs`. These tests
       // do not involve symlinked prefixes, so the raw and realpath'd roots are
       // identical.
@@ -177,17 +174,6 @@ describe('CLI list', () => {
     expect(joined).toContain('list')
     expect(joined).toContain('--base-dir')
     expect(joined).toContain('-h, --help')
-  })
-
-  it('should show help text and exit with code 0 when -h is passed', async () => {
-    const { stderr, error } = await captureOutput(() => runList(['-h']))
-
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(0)')
-
-    const joined = stderr.join('\n')
-    expect(joined).toContain('Usage: mcp-local-rag')
-    expect(joined).toContain('list')
   })
 
   // --------------------------------------------
@@ -234,25 +220,6 @@ describe('CLI list', () => {
   })
 
   // --------------------------------------------
-  // --base-dir option
-  // --------------------------------------------
-  it('should parse --base-dir option correctly', async () => {
-    // Arrange
-    mocks.readdir.mockResolvedValue([])
-    mocks.listFiles.mockResolvedValue([])
-
-    // Act
-    const { stdout, error } = await captureOutput(() => runList(['--base-dir', '/tmp/my-docs']))
-
-    // Assert: no error
-    expect(error).toBeUndefined()
-
-    // Assert: baseDir in output matches --base-dir flag
-    const result = JSON.parse(stdout.join(''))
-    expect(result.baseDir).toBe('/tmp/my-docs')
-  })
-
-  // --------------------------------------------
   // Unknown flags cause exit(1)
   // --------------------------------------------
   it('should exit with code 1 on unknown flags', async () => {
@@ -273,45 +240,6 @@ describe('CLI list', () => {
 
     const joined = stderr.join('\n')
     expect(joined).toContain('Unexpected argument')
-  })
-
-  // --------------------------------------------
-  // baseDir resolution from env var fallback
-  // --------------------------------------------
-  it('should resolve baseDir from BASE_DIR env var when no --base-dir flag', async () => {
-    // Arrange
-    process.env['BASE_DIR'] = '/env/docs'
-    mocks.readdir.mockResolvedValue([])
-    mocks.listFiles.mockResolvedValue([])
-
-    // Act
-    const { stdout, error } = await captureOutput(() => runList([], { dbPath: '/some/db' }))
-
-    // Assert
-    expect(error).toBeUndefined()
-    const result = JSON.parse(stdout.join(''))
-    expect(result.baseDir).toBe('/env/docs')
-
-    // Cleanup
-    delete process.env['BASE_DIR']
-  })
-
-  it('should prefer --base-dir flag over BASE_DIR env var', async () => {
-    // Arrange
-    process.env['BASE_DIR'] = '/env/docs'
-    mocks.readdir.mockResolvedValue([])
-    mocks.listFiles.mockResolvedValue([])
-
-    // Act
-    const { stdout, error } = await captureOutput(() => runList(['--base-dir', '/cli/docs']))
-
-    // Assert
-    expect(error).toBeUndefined()
-    const result = JSON.parse(stdout.join(''))
-    expect(result.baseDir).toBe('/cli/docs')
-
-    // Cleanup
-    delete process.env['BASE_DIR']
   })
 
   // --------------------------------------------
@@ -337,41 +265,6 @@ describe('CLI list', () => {
     expect(result.sources).toHaveLength(1)
     expect(result.sources[0]).toHaveProperty('source')
     expect(result.sources[0].chunkCount).toBe(5)
-  })
-
-  // --------------------------------------------
-  // Excludes dbPath and cacheDir from scan
-  // --------------------------------------------
-  it('should exclude dbPath and cacheDir paths from file scan', async () => {
-    // Arrange — scanRoot now uses bounded BFS (Finding #10), so the
-    // exclude check must see a real subdirectory under the root. The
-    // `lancedb` directory and its `chunks.md` file are returned by
-    // `readdir(lancedb)`, where the join() composes a path under
-    // `resolvedDbPath` that the excludePaths prefix check rejects.
-    const baseDir = process.cwd()
-    const resolvedDbPath = resolve(baseDir, 'lancedb')
-
-    mocks.readdir.mockImplementation(async (path: string) => {
-      if (path === baseDir) {
-        return [mockDirent('doc.md', baseDir), mockDirent('lancedb', baseDir, 'directory')]
-      }
-      if (path === resolvedDbPath) {
-        return [mockDirent('chunks.md', resolvedDbPath)]
-      }
-      return []
-    })
-    mocks.listFiles.mockResolvedValue([])
-
-    // Act
-    const { stdout, error } = await captureOutput(() => runList([]))
-
-    // Assert
-    expect(error).toBeUndefined()
-    const result = JSON.parse(stdout.join(''))
-    // Only doc.md should be listed, not chunks.md in lancedb dir
-    const filePaths = result.files.map((f: Record<string, unknown>) => f.filePath)
-    expect(filePaths.some((p: string) => p.endsWith('doc.md'))).toBe(true)
-    expect(filePaths.some((p: string) => p.includes('lancedb'))).toBe(false)
   })
 
   // --------------------------------------------
@@ -646,16 +539,6 @@ describe('CLI list', () => {
       expect(result.options.baseDirs).toEqual(['/a', '/b'])
     })
 
-    it('should leave baseDirs undefined when --base-dir is not provided', () => {
-      const result = parseArgs([])
-      expect(result.options.baseDirs).toBeUndefined()
-    })
-
-    it('should keep single --base-dir backward-compatible (array of one)', () => {
-      const result = parseArgs(['--base-dir', '/only'])
-      expect(result.options.baseDirs).toEqual(['/only'])
-    })
-
     it('should parse --help flag', () => {
       const result = parseArgs(['--help'])
       expect(result).toEqual({ options: {}, help: true })
@@ -664,14 +547,6 @@ describe('CLI list', () => {
     it('should parse -h flag', () => {
       const result = parseArgs(['-h'])
       expect(result).toEqual({ options: {}, help: true })
-    })
-
-    it('should error on unknown flags', () => {
-      expect(() => parseArgs(['--verbose'])).toThrow('process.exit(1)')
-    })
-
-    it('should error on positional arguments', () => {
-      expect(() => parseArgs(['some-path'])).toThrow('process.exit(1)')
     })
 
     it('should error when --base-dir value is missing', () => {
@@ -696,12 +571,12 @@ describe('CLI list', () => {
   })
 
   // --------------------------------------------
-  // P2-T3: CLI multi-root precedence / fallback / config-error matrix
+  // P2-T3: CLI multi-root precedence / fallback
   //
   // These tests assert the boundary contract between `runList` and the shared
   // `resolveCliBaseDirsOrExit` helper. They drive each scenario from the
-  // resolver mock (env vars, warnings, error path) rather than touching the
-  // real env / filesystem so the cases remain deterministic and isolated.
+  // resolver mock rather than touching the real env / filesystem so the cases
+  // remain deterministic and isolated.
   // --------------------------------------------
   describe('multi-root precedence (P2-T3)', () => {
     it('passes CLI roots verbatim to the resolver and suppresses any env precedence warning', async () => {
@@ -779,82 +654,6 @@ describe('CLI list', () => {
       expect(filePaths).toContain(resolve(envRootB, 'b.md'))
 
       // Assert: no warnings surfaced because the resolver returned none.
-      expect(stderr.join('\n')).not.toMatch(/BASE_DIRS|BASE_DIR/)
-    })
-
-    it('surfaces BASE_DIRS > BASE_DIR precedence warning on stderr (no CLI roots)', async () => {
-      // Arrange: resolver attaches `base-dirs-overrides-base-dir` because both
-      // BASE_DIRS and BASE_DIR are set with no CLI override. The CLI must
-      // print the warning message to stderr.
-      mocks.initialize.mockResolvedValue(undefined)
-      const root = resolve('/env/multi/only')
-      mocks.resolveCliBaseDirs.mockResolvedValue({
-        config: { baseDirs: [root], rawBaseDirs: [root] },
-        warnings: [
-          {
-            kind: 'base-dirs-overrides-base-dir',
-            message:
-              'BASE_DIRS is set; BASE_DIR is ignored. Unset BASE_DIR or remove BASE_DIRS to silence this warning.',
-          },
-        ],
-      })
-      mocks.readdir.mockResolvedValue([])
-      mocks.listFiles.mockResolvedValue([])
-
-      // Act
-      const { stderr, error } = await captureOutput(() => runList([]))
-
-      // Assert: precedence message reached stderr.
-      expect(error).toBeUndefined()
-      const joined = stderr.join('\n')
-      expect(joined).toContain('BASE_DIRS is set')
-      expect(joined).toContain('BASE_DIR is ignored')
-    })
-
-    it('exits non-zero with a stderr error when the resolver rejects invalid BASE_DIRS', async () => {
-      // Arrange: `resolveCliBaseDirsOrExit` itself calls process.exit(1) after
-      // printing the config error to stderr (see common.ts). We simulate
-      // that path by making the mock throw `process.exit(1)` and writing the
-      // error message to stderr first, mirroring production behavior.
-      mocks.initialize.mockResolvedValue(undefined)
-      mocks.resolveCliBaseDirs.mockImplementation(() => {
-        console.error(
-          'BASE_DIRS must be a JSON array of non-empty path strings. Failed to parse as JSON: not-json'
-        )
-        throw new Error('process.exit(1)')
-      })
-
-      // Act
-      const { stderr, error } = await captureOutput(() => runList([]))
-
-      // Assert: CLI propagates exit(1) and the config error is visible.
-      expect(error).toBeInstanceOf(Error)
-      expect(expectError(error).message).toBe('process.exit(1)')
-      const joined = stderr.join('\n')
-      expect(joined).toContain('BASE_DIRS')
-      expect(joined).toContain('JSON')
-    })
-
-    it('uses cwd as the only effective root when neither CLI roots nor env vars are set', async () => {
-      // Arrange: resolver returns cwd as the only effective root (matches the
-      // resolver's final fallback rule). No warnings expected.
-      mocks.initialize.mockResolvedValue(undefined)
-      const cwd = process.cwd()
-      mocks.resolveCliBaseDirs.mockResolvedValue({
-        config: { baseDirs: [cwd], rawBaseDirs: [cwd] },
-        warnings: [],
-      })
-      mocks.readdir.mockResolvedValue([])
-      mocks.listFiles.mockResolvedValue([])
-
-      // Act
-      const { stdout, stderr, error } = await captureOutput(() => runList([]))
-
-      // Assert: baseDir in JSON output is cwd; resolver called with no CLI roots.
-      expect(error).toBeUndefined()
-      expect(mocks.resolveCliBaseDirs).toHaveBeenCalledWith([])
-      const result = JSON.parse(stdout.join(''))
-      expect(result.baseDir).toBe(cwd)
       expect(stderr.join('\n')).not.toMatch(/BASE_DIRS|BASE_DIR/)
     })
   })

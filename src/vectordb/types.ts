@@ -238,7 +238,7 @@ function isDocumentMetadata(value: unknown): value is DocumentMetadata {
 /**
  * Type guard for LanceDB raw search result
  */
-export function isLanceDBRawResult(value: unknown): value is LanceDBRawResult {
+function isLanceDBRawResult(value: unknown): value is LanceDBRawResult {
   if (!isRecord(value)) {
     return false
   }

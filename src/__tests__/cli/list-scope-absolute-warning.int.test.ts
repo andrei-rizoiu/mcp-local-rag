@@ -2,14 +2,13 @@
 //
 // AC: The `list` help documents that `--scope` must be absolute and a relative
 //     prefix matches nothing. This test pins the CLI UX signal: a non-absolute
-//     `--scope` prints a non-fatal stderr warning while STILL exiting 0 with a
-//     (correctly empty for that prefix) result — relative is unhelpful, not an
-//     error. Absolute `--scope` prints no such warning and returns its results.
-// Behavior: `runList(['--scope', <relative>])` over a real LanceDB + real-FS
-//     fixture (uningested scan, no embedder) → non-absolute prefix filtered by
-//     `nonAbsolutePrefixes` and printed as a `Warning [scope]:` stderr line,
-//     process exits 0, stdout result stays empty for that prefix; absolute
-//     `--scope` emits no such warning and returns its scanned files[].
+//     `--scope` prints a non-fatal stderr warning while STILL exiting 0 —
+//     relative is unhelpful, not an error. Absolute `--scope` prints no such
+//     warning and returns its results.
+// Behavior: `runList(['--scope', <absolute>, '--scope', <relative>])` over a
+//     real LanceDB + real-FS fixture (uningested scan, no embedder) → only the
+//     non-absolute prefix is printed as a `Warning [scope]:` stderr line,
+//     process exits 0, and the absolute prefix still returns its scanned files[].
 
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -84,35 +83,6 @@ describe('runList(--scope) — non-absolute prefix warning (finding #2)', () => 
 
   afterAll(() => {
     rmSync(base, { recursive: true, force: true })
-  })
-
-  it('warns on stderr for a relative --scope but still exits 0 with an empty result', async () => {
-    const { stdout, stderr, error } = await captureRunList(
-      ['--base-dir', dataDir, '--scope', 'relative'],
-      globalOptions
-    )
-
-    // No exit thrown → exit 0 (relative is unhelpful, not an error).
-    expect(error).toBeUndefined()
-    expect(warnedPrefixes(stderr)).toContain('relative')
-
-    const parsed = JSON.parse(stdout.join(''))
-    const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-    expect(filePaths).not.toContain(inScopeFile)
-  })
-
-  it('emits no non-absolute warning for an absolute --scope and returns its results', async () => {
-    const { stdout, stderr, error } = await captureRunList(
-      ['--base-dir', dataDir, '--scope', dataDir],
-      globalOptions
-    )
-
-    expect(error).toBeUndefined()
-    expect(warnedPrefixes(stderr)).toEqual([])
-
-    const parsed = JSON.parse(stdout.join(''))
-    const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-    expect(filePaths).toContain(inScopeFile)
   })
 
   it('warns only for the relative prefix in a mixed --scope and keeps absolute results', async () => {

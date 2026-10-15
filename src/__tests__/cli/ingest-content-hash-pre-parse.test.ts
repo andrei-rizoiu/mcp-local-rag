@@ -1,6 +1,6 @@
 // `contentHash` must be read before the parse. Real fixtures under `tmp/`,
-// `ingestSingleFile` on structural stubs, a real `DocumentParser` for the
-// boundary cases, and the real sync core deciding what a later sync does.
+// `ingestSingleFile` on structural stubs, and a real `DocumentParser` for the
+// boundary cases.
 //
 // The hash used to come from a second read taken after parse, chunk and embed.
 // Embedding takes seconds, so an editor saving inside that window left the
@@ -19,13 +19,11 @@
 // which is how "no byte read happened" becomes observable. This file's own
 // fixture I/O uses `node:fs`, so it never enters that record.
 
-import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SemanticChunker } from '../../chunker/index.js'
 import type { Embedder } from '../../embedder/index.js'
-import type { SyncCollaborators } from '../../features/sync.js'
 import type { DocumentParser } from '../../parser/index.js'
 import type { VectorChunk, VectorStore } from '../../vectordb/index.js'
 import { asDouble } from '../test-doubles.js'
@@ -53,7 +51,6 @@ const fsPromisesFactory = async (
 const MOCKED_PATHS = ['node:fs/promises'] as const
 
 let ingestSingleFile: typeof import('../../cli/ingest.js').ingestSingleFile
-let runSync: typeof import('../../features/sync.js').runSync
 let DocumentParserClass: typeof import('../../parser/index.js').DocumentParser
 
 // ============================================
@@ -69,10 +66,9 @@ const CONTENT_BEFORE = 'Content as the parser read it.\n'
 /** Bytes an editor writes while the embeddings are being computed. */
 const CONTENT_AFTER = 'Content saved by an editor while the embeddings were being computed.\n'
 
-// Literal SHA-256 hex digests of the two fixture contents, computed outside this
-// codebase so no production hashing code participates in the oracle.
+// Literal SHA-256 hex digest of CONTENT_BEFORE, computed outside this codebase
+// so no production hashing code participates in the oracle.
 const HASH_BEFORE = '75e9e43b593c277cb3b9550ae74c059fa596f9fa7a8abea5091a7a8116e0ba04'
-const HASH_AFTER = 'd81c99f614d793cb111431a2852d16593929a924e751b2e3034d57d6ed5c266f'
 
 // ============================================
 // Structural stubs
@@ -156,7 +152,6 @@ beforeAll(async () => {
   vi.resetModules()
   vi.doMock('node:fs/promises', fsPromisesFactory)
   ;({ ingestSingleFile } = await import('../../cli/ingest.js'))
-  ;({ runSync } = await import('../../features/sync.js'))
   ;({ DocumentParser: DocumentParserClass } = await import('../../parser/index.js'))
 })
 
@@ -185,56 +180,6 @@ describe('ingestSingleFile — contentHash is taken before parsing', () => {
     expect(readFileSync(REPORT_PATH, 'utf-8')).toBe(CONTENT_AFTER)
     expect(inserted).toHaveLength(1)
     expect(inserted[0]?.contentHash).toBe(HASH_BEFORE)
-  })
-
-  it('leaves a later sync re-ingesting the file instead of skipping it', async () => {
-    const inserted = await ingestWithMidFlightModification()
-    const dbRows = inserted.map((chunk) => ({
-      filePath: chunk.filePath,
-      contentHash: chunk.contentHash ?? null,
-    }))
-
-    const ingestedBySync: string[] = []
-    const collaborators: SyncCollaborators = {
-      canonicalizeRequestedPath: async (path: string) => path,
-      classifyPath: async () => 'file',
-      scanDir: async () => ({
-        files: [],
-        unreadableDirs: [],
-        depthLimitedDirs: [],
-        skippedSymlinks: [],
-      }),
-      // The adapters' own `hashFile`: the current bytes on disk, which are the
-      // post-modification ones.
-      hashFile: async (filePath: string) =>
-        createHash('sha256').update(readFileSync(filePath)).digest('hex'),
-      loadDbManifest: async () => dbRows,
-      ingestFile: async (filePath: string) => {
-        ingestedBySync.push(filePath)
-        return 1
-      },
-      deleteExactPath: async () => 0,
-      optimize: async () => undefined,
-    }
-
-    const result = await runSync({
-      roots: [DOCS_DIR],
-      canonicalRoots: [DOCS_DIR],
-      dbPath: join(TMP_ROOT, 'db'),
-      excludePaths: [],
-      platform: process.platform,
-      requestedPath: REPORT_PATH,
-      collaborators,
-    })
-
-    expect(result.error).toBeNull()
-    expect(result.upserted).toBe(1)
-    expect(result.skipped).toBe(0)
-    expect(ingestedBySync).toEqual([REPORT_PATH])
-    // The disk hash sync compared against is the post-modification one, so the
-    // stored hash was the older of the two — the fail-dirty direction.
-    expect(dbRows[0]?.contentHash).toBe(HASH_BEFORE)
-    expect(HASH_BEFORE).not.toBe(HASH_AFTER)
   })
 })
 

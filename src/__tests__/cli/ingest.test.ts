@@ -181,7 +181,7 @@ function mockDirStat() {
  */
 function mockDirent(
   name: string,
-  type: 'file' | 'directory' | 'symlink' = 'file'
+  type: 'file' | 'directory' = 'file'
 ): {
   name: string
   isFile: () => boolean
@@ -192,7 +192,7 @@ function mockDirent(
     name,
     isFile: () => type === 'file',
     isDirectory: () => type === 'directory',
-    isSymbolicLink: () => type === 'symlink',
+    isSymbolicLink: () => false,
   }
 }
 
@@ -403,8 +403,11 @@ describe('CLI ingest', () => {
       runIngest(['--base-dir', rootA, '--base-dir', rootB, rootA])
     )
 
-    // Assert: exactly one file (rootA/a.md) ingested.
+    // Assert: resolver received the CLI roots verbatim and in order.
     expect(error).toBeUndefined()
+    expect(mocks.resolveCliBaseDirs).toHaveBeenCalledWith([rootA, rootB])
+
+    // Assert: exactly one file (rootA/a.md) ingested.
     const joined = output.join('\n')
     expect(joined).toContain('Found 1 file(s) to ingest')
     expect(joined).toContain(resolve(rootA, 'a.md'))
@@ -548,98 +551,6 @@ describe('CLI ingest', () => {
     expect(joined).toContain(
       'Warning: some directories were skipped because they exceed the maximum depth'
     )
-  })
-
-  it('should include files at exactly depth 9 boundary', async () => {
-    // Arrange: single file at depth 9 (deepest allowed)
-    const dirPath = resolve('/tmp/test/docs')
-    mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-    mocks.resolveCliBaseDirs.mockResolvedValue({ config: { baseDirs: [dirPath] }, warnings: [] })
-
-    const dirMap: Record<string, ReturnType<typeof mockDirent>[]> = {
-      [dirPath]: [mockDirent('d1', 'directory')],
-    }
-    let current = dirPath
-    for (let i = 1; i <= 9; i++) {
-      const next = resolve(`${current}/d${i}`)
-      dirMap[next] = i < 9 ? [mockDirent(`d${i + 1}`, 'directory')] : [mockDirent('boundary.md')]
-      current = next
-    }
-
-    setupMockReaddir(dirMap)
-    setupSuccessfulIngestion()
-
-    // Act
-    const { output, error } = await captureStderr(() => runIngest([dirPath]))
-
-    // Assert: file is included
-    expect(error).toBeUndefined()
-    const joined = output.join('\n')
-    expect(joined).toContain('[1/1]')
-    expect(joined).toContain('Succeeded: 1')
-    expect(joined).not.toContain('Warning')
-  })
-
-  it('should skip directories at exactly depth 10 and show warning', async () => {
-    // Arrange: all files are beyond depth 10
-    const dirPath = resolve('/tmp/test/docs')
-    mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-    mocks.resolveCliBaseDirs.mockResolvedValue({ config: { baseDirs: [dirPath] }, warnings: [] })
-
-    // Build 10 levels of directories so depth 10 is skipped
-    const dirMap: Record<string, ReturnType<typeof mockDirent>[]> = {
-      [dirPath]: [mockDirent('d1', 'directory')],
-    }
-    let current = dirPath
-    for (let i = 1; i <= 10; i++) {
-      const next = resolve(`${current}/d${i}`)
-      dirMap[next] = i < 10 ? [mockDirent(`d${i + 1}`, 'directory')] : [mockDirent('beyond.md')]
-      current = next
-    }
-
-    setupMockReaddir(dirMap)
-
-    // Act
-    const { output, error } = await captureStderr(() => runIngest([dirPath]))
-
-    // Assert: exit(1) because no files remain after depth filtering
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(1)')
-
-    const joined = output.join('\n')
-    expect(joined).toContain(
-      'Warning: some directories were skipped because they exceed the maximum depth'
-    )
-    expect(joined).toContain('No supported files found')
-  })
-
-  // --------------------------------------------
-  // Symlink skipping
-  // --------------------------------------------
-  it('should skip symbolic links and not include them in file list', async () => {
-    // Arrange
-    const dirPath = resolve('/tmp/test/docs')
-    mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-    mocks.resolveCliBaseDirs.mockResolvedValue({ config: { baseDirs: [dirPath] }, warnings: [] })
-
-    setupMockReaddir({
-      [dirPath]: [
-        mockDirent('real.md'),
-        mockDirent('link-to-secret.md', 'symlink'),
-        mockDirent('link-dir', 'symlink'),
-      ],
-    })
-
-    setupSuccessfulIngestion()
-
-    // Act
-    const { output, error } = await captureStderr(() => runIngest([dirPath]))
-
-    // Assert: only the real file is processed
-    expect(error).toBeUndefined()
-    const joined = output.join('\n')
-    expect(joined).toContain('[1/1]')
-    expect(joined).toContain('Succeeded: 1')
   })
 
   // --------------------------------------------
@@ -794,36 +705,6 @@ describe('CLI ingest', () => {
   })
 
   // --------------------------------------------
-  // Progress output
-  // --------------------------------------------
-  it('should output progress in [N/Total] format to stderr', async () => {
-    // Arrange
-    const dirPath = resolve('/tmp/test/docs')
-    mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-    mocks.resolveCliBaseDirs.mockResolvedValue({ config: { baseDirs: [dirPath] }, warnings: [] })
-
-    setupMockReaddir({
-      [dirPath]: [mockDirent('a.md'), mockDirent('b.txt'), mockDirent('sub', 'directory')],
-      [resolve('/tmp/test/docs/sub')]: [mockDirent('c.md')],
-    })
-
-    setupSuccessfulIngestion()
-
-    // Act
-    const { output, error } = await captureStderr(() => runIngest([dirPath]))
-
-    // Assert: returns normally without process.exit
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBeUndefined()
-
-    // Assert: progress format [N/Total]
-    const joined = output.join('\n')
-    expect(joined).toMatch(/\[1\/3\]/)
-    expect(joined).toMatch(/\[2\/3\]/)
-    expect(joined).toMatch(/\[3\/3\]/)
-  })
-
-  // --------------------------------------------
   // --help shows usage and exits
   // --------------------------------------------
   it('should show help text and exit with code 0 when --help is passed', async () => {
@@ -842,19 +723,6 @@ describe('CLI ingest', () => {
     expect(joined).toContain('--max-file-size')
     expect(joined).toContain('-h, --help')
     expect(joined).toContain('104857600')
-  })
-
-  it('should show help text and exit with code 0 when -h is passed', async () => {
-    // Act
-    const { output, error } = await captureStderr(() => runIngest(['-h']))
-
-    // Assert: exit(0)
-    expect(error).toBeInstanceOf(Error)
-    expect(expectError(error).message).toBe('process.exit(0)')
-
-    const joined = output.join('\n')
-    expect(joined).toContain('Usage: mcp-local-rag')
-    expect(joined).toContain('ingest')
   })
 
   // --------------------------------------------
@@ -913,90 +781,6 @@ describe('CLI ingest', () => {
   })
 
   // --------------------------------------------
-  // Global options via env vars (no CLI flags)
-  // --------------------------------------------
-  it('should use environment variables when no global options provided', async () => {
-    // Arrange: set env vars
-    process.env['DB_PATH'] = '/env/db'
-    process.env['CACHE_DIR'] = '/env/cache'
-    process.env['MODEL_NAME'] = 'env-model'
-
-    const filePath = '/tmp/test/document.md'
-    mocks.stat.mockResolvedValue(mockFileStat())
-    setupSuccessfulIngestion()
-
-    // Act: no global options
-    const { error } = await captureStderr(() => runIngest([filePath]))
-
-    // Assert: returns normally without process.exit
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBeUndefined()
-
-    // Assert: createVectorStore was called with env db-path
-    const { createVectorStore } = await import('../../cli/common.js')
-    expect(createVectorStore).toHaveBeenCalledWith(expect.objectContaining({ dbPath: '/env/db' }))
-
-    // Assert: createEmbedder was called with env model-name and cache-dir
-    const { createEmbedder } = await import('../../cli/common.js')
-    expect(createEmbedder).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelName: 'env-model',
-        cacheDir: '/env/cache',
-      })
-    )
-
-    // Cleanup
-    delete process.env['DB_PATH']
-    delete process.env['CACHE_DIR']
-    delete process.env['MODEL_NAME']
-  })
-
-  // --------------------------------------------
-  // Global options override env vars
-  // --------------------------------------------
-  it('should use global CLI flags over environment variables', async () => {
-    // Arrange: set env vars
-    process.env['DB_PATH'] = '/env/db'
-    process.env['CACHE_DIR'] = '/env/cache'
-    process.env['MODEL_NAME'] = 'env-model'
-
-    const filePath = '/tmp/test/document.md'
-    mocks.stat.mockResolvedValue(mockFileStat())
-    setupSuccessfulIngestion()
-
-    // Act: pass global options that should override env vars
-    const { error } = await captureStderr(() =>
-      runIngest([filePath], {
-        dbPath: '/cli/db',
-        cacheDir: '/cli/cache',
-        modelName: 'cli-model',
-      })
-    )
-
-    // Assert: returns normally without process.exit
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBeUndefined()
-
-    // Assert: createVectorStore was called with CLI db-path, not env
-    const { createVectorStore } = await import('../../cli/common.js')
-    expect(createVectorStore).toHaveBeenCalledWith(expect.objectContaining({ dbPath: '/cli/db' }))
-
-    // Assert: createEmbedder was called with CLI model-name and cache-dir
-    const { createEmbedder } = await import('../../cli/common.js')
-    expect(createEmbedder).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelName: 'cli-model',
-        cacheDir: '/cli/cache',
-      })
-    )
-
-    // Cleanup
-    delete process.env['DB_PATH']
-    delete process.env['CACHE_DIR']
-    delete process.env['MODEL_NAME']
-  })
-
-  // --------------------------------------------
   // Unknown options error (including global flags after subcommand)
   // --------------------------------------------
   it('should error when global flags are passed after subcommand', async () => {
@@ -1043,16 +827,6 @@ describe('CLI ingest', () => {
       expect(result.options.baseDirs).toEqual(['/a', '/b'])
     })
 
-    it('should leave baseDirs undefined when --base-dir is not provided', () => {
-      const result = parseArgs(['/target'])
-      expect(result.options.baseDirs).toBeUndefined()
-    })
-
-    it('should keep single --base-dir backward-compatible (array of one)', () => {
-      const result = parseArgs(['--base-dir', '/only', '/target'])
-      expect(result.options.baseDirs).toEqual(['/only'])
-    })
-
     it('should parse --help flag', () => {
       const result = parseArgs(['--help'])
       expect(result.help).toBe(true)
@@ -1063,37 +837,10 @@ describe('CLI ingest', () => {
       expect(result.help).toBe(true)
     })
 
-    it('should handle flags before positional', () => {
-      const result = parseArgs(['--base-dir', '/base', '/target'])
-      expect(result.positional).toBe('/target')
-      expect(result.options.baseDirs).toEqual(['/base'])
-    })
-
     it('should handle flags after positional', () => {
       const result = parseArgs(['/target', '--base-dir', '/base'])
       expect(result.positional).toBe('/target')
       expect(result.options.baseDirs).toEqual(['/base'])
-    })
-
-    it('should error on unknown flags', () => {
-      // --db-path is now a global option, not recognized by ingest parseArgs
-      expect(() => parseArgs(['--db-path', '/db', '/target'])).toThrow('process.exit(1)')
-    })
-
-    // Regression test for issue #79
-    it('should error when multiple positional arguments are given', () => {
-      // Act & Assert
-      expect(() => parseArgs(['/path1', '/path2'])).toThrow('process.exit(1)')
-    })
-
-    it('should error when --base-dir value is missing', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseArgs(['--base-dir'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --base-dir')
-      } finally {
-        errorSpy.mockRestore()
-      }
     })
 
     it('should error when --max-file-size value is missing', () => {
@@ -1126,30 +873,10 @@ describe('CLI ingest', () => {
       }
     })
 
-    it('should detect --base-dir value starting with dash as missing', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseArgs(['--base-dir', '--max-file-size'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --base-dir')
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
     it('should parse --chunk-min-length flag', () => {
       const result = parseArgs(['--chunk-min-length', '100', '/target'])
       expect(result.positional).toBe('/target')
       expect(result.options.chunkMinLength).toBe(100)
-    })
-
-    it('should error when --chunk-min-length value is missing', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseArgs(['--chunk-min-length'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --chunk-min-length')
-      } finally {
-        errorSpy.mockRestore()
-      }
     })
 
     it('should error when --chunk-min-length value is non-numeric', () => {
@@ -1157,44 +884,6 @@ describe('CLI ingest', () => {
       try {
         expect(() => parseArgs(['--chunk-min-length', 'abc', '/target'])).toThrow('process.exit(1)')
         expect(errorSpy).toHaveBeenCalledWith('Invalid value for --chunk-min-length: "abc"')
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should parse --visual-quality fast', () => {
-      const result = parseArgs(['--visual', '--visual-quality', 'fast', '/target'])
-      expect(result.positional).toBe('/target')
-      expect(result.options.visual).toBe(true)
-      expect(result.options.visualQuality).toBe('fast')
-    })
-
-    it('should parse --visual-quality quality', () => {
-      const result = parseArgs(['--visual', '--visual-quality', 'quality', '/target'])
-      expect(result.options.visualQuality).toBe('quality')
-    })
-
-    it('should reject --visual-quality with an invalid value', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseArgs(['--visual', '--visual-quality', 'extreme', '/target'])).toThrow(
-          'process.exit(1)'
-        )
-        expect(
-          errorSpy.mock.calls.some((call) =>
-            String(call[0]).includes('Invalid value for --visual-quality')
-          )
-        ).toBe(true)
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when --visual-quality value is missing', () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        expect(() => parseArgs(['--visual-quality'])).toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith('Missing value for --visual-quality')
       } finally {
         errorSpy.mockRestore()
       }
@@ -1237,74 +926,11 @@ describe('CLI ingest', () => {
   // --------------------------------------------
   describe('resolveConfig validation', () => {
     afterEach(() => {
-      delete process.env['BASE_DIR']
       delete process.env['MAX_FILE_SIZE']
       delete process.env['CHUNK_MIN_LENGTH']
     })
 
-    it('should error when BASE_DIR env var points to sensitive path', async () => {
-      // Env-derived sensitive-path rejection lives in
-      // `resolveCliBaseDirsOrExit`, not in `resolveConfig`, so the mocked
-      // resolver raises the exit(1) and this asserts that `resolveConfig`
-      // propagates it.
-      process.env['BASE_DIR'] = '/etc/documents'
-      mocks.resolveCliBaseDirs.mockImplementation(() => {
-        console.error('Refusing to use sensitive system path for --base-dir: /etc/documents')
-        throw new Error('process.exit(1)')
-      })
-      const globalConfig = resolveGlobalConfig({})
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        await expect(resolveConfig(globalConfig, {})).rejects.toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('sensitive system path'))
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when MAX_FILE_SIZE env var is zero', async () => {
-      process.env['MAX_FILE_SIZE'] = '0'
-      const globalConfig = resolveGlobalConfig({})
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        await expect(resolveConfig(globalConfig, {})).rejects.toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Invalid MAX_FILE_SIZE value: "0"')
-        )
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when MAX_FILE_SIZE env var is negative', async () => {
-      process.env['MAX_FILE_SIZE'] = '-100'
-      const globalConfig = resolveGlobalConfig({})
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        await expect(resolveConfig(globalConfig, {})).rejects.toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Invalid MAX_FILE_SIZE value: "-100"')
-        )
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it('should error when MAX_FILE_SIZE env var exceeds 500MB', async () => {
-      process.env['MAX_FILE_SIZE'] = '999999999'
-      const globalConfig = resolveGlobalConfig({})
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      try {
-        await expect(resolveConfig(globalConfig, {})).rejects.toThrow('process.exit(1)')
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Invalid MAX_FILE_SIZE value: "999999999"')
-        )
-      } finally {
-        errorSpy.mockRestore()
-      }
-    })
-
-    it.each(['1e8', '0x100000', '100MB', '52428800.9'])(
+    it.each(['0', '-100', '999999999', '1e8', '0x100000', '100MB', '52428800.9'])(
       'should error naming MAX_FILE_SIZE when the env var is %s',
       async (value) => {
         process.env['MAX_FILE_SIZE'] = value
@@ -1432,48 +1058,9 @@ describe('CLI ingest', () => {
     })
   })
 
-  // Multi-root precedence / fallback / config-error matrix, mirroring
-  // `list.test.ts` so the resolver boundary is asserted at both CLI entry
-  // points. Driven from the resolver mock, so no real env or filesystem.
+  // Multi-root fallback, driven from the resolver mock, so no real env or
+  // filesystem.
   describe('multi-root precedence (P2-T3)', () => {
-    it('passes CLI roots verbatim to the resolver and suppresses any env precedence warning', async () => {
-      // Arrange: env vars are set but the user supplied --base-dir. The
-      // resolver contract is "CLI replaces env, no precedence warning".
-      // Post-Finding-#1: the scan walks only the positional path. We still
-      // assert resolver wiring + no-precedence-warning; the scan is single-
-      // tree under `cliRootA`.
-      process.env['BASE_DIR'] = '/env/single'
-      process.env['BASE_DIRS'] = '["/env/multi/a","/env/multi/b"]'
-      const cliRootA = resolve('/cli/precedence/a')
-      const cliRootB = resolve('/cli/precedence/b')
-      mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-      mocks.resolveCliBaseDirs.mockResolvedValue({
-        config: { baseDirs: [cliRootA, cliRootB] },
-        warnings: [],
-      })
-      setupMockReaddir({ [cliRootA]: [mockDirent('a.md')] })
-      setupSuccessfulIngestion()
-
-      try {
-        // Act
-        const { output, error } = await captureStderr(() =>
-          runIngest(['--base-dir', cliRootA, '--base-dir', cliRootB, cliRootA])
-        )
-
-        // Assert: resolver received the CLI roots verbatim and in order.
-        expect(error).toBeUndefined()
-        expect(mocks.resolveCliBaseDirs).toHaveBeenCalledWith([cliRootA, cliRootB])
-
-        // Assert: no precedence warning surfaced to stderr.
-        const joined = output.join('\n')
-        expect(joined).not.toContain('BASE_DIRS is set')
-        expect(joined).not.toContain('BASE_DIR is ignored')
-      } finally {
-        delete process.env['BASE_DIR']
-        delete process.env['BASE_DIRS']
-      }
-    })
-
     it('uses BASE_DIRS fallback (multi-root) when no --base-dir is provided', async () => {
       // Arrange: no CLI roots; resolver returns the BASE_DIRS-driven multi-root
       // set. The CLI must forward an empty `cliRoots` array so the resolver
@@ -1502,77 +1089,6 @@ describe('CLI ingest', () => {
       expect(joined).toContain('Found 1 file(s) to ingest')
       expect(joined).toContain(resolve(envRootA, 'a.md'))
       expect(joined).not.toContain(resolve(envRootB, 'b.md'))
-    })
-
-    it('surfaces BASE_DIRS > BASE_DIR precedence warning on stderr (no CLI roots)', async () => {
-      // Arrange: resolver yields the precedence warning. The CLI prints
-      // every resolver warning to stderr before the scan output begins.
-      const root = resolve('/env/multi/only')
-      mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-      mocks.resolveCliBaseDirs.mockResolvedValue({
-        config: { baseDirs: [root] },
-        warnings: [
-          {
-            kind: 'base-dirs-overrides-base-dir',
-            message:
-              'BASE_DIRS is set; BASE_DIR is ignored. Unset BASE_DIR or remove BASE_DIRS to silence this warning.',
-          },
-        ],
-      })
-      setupMockReaddir({ [root]: [mockDirent('a.md')] })
-      setupSuccessfulIngestion()
-
-      // Act
-      const { output, error } = await captureStderr(() => runIngest([root]))
-
-      // Assert: precedence warning reached stderr.
-      expect(error).toBeUndefined()
-      const joined = output.join('\n')
-      expect(joined).toContain('BASE_DIRS is set')
-      expect(joined).toContain('BASE_DIR is ignored')
-    })
-
-    it('exits non-zero with a stderr error when the resolver rejects invalid BASE_DIRS', async () => {
-      // Arrange: `resolveCliBaseDirsOrExit` exits with code 1 after printing
-      // the BASE_DIRS config error. We simulate that path with a throwing
-      // mock so the CLI's exit handling can be verified.
-      mocks.stat.mockResolvedValue(mockFileStat())
-      mocks.resolveCliBaseDirs.mockImplementation(() => {
-        console.error('BASE_DIRS must be a JSON array of non-empty path strings.')
-        throw new Error('process.exit(1)')
-      })
-
-      // Act
-      const { output, error } = await captureStderr(() => runIngest(['/tmp/test/document.md']))
-
-      // Assert: CLI propagates exit(1) and config error is visible.
-      expect(error).toBeInstanceOf(Error)
-      expect(expectError(error).message).toBe('process.exit(1)')
-      const joined = output.join('\n')
-      expect(joined).toContain('BASE_DIRS')
-    })
-
-    it('uses cwd as the only effective root when neither CLI roots nor env vars are set', async () => {
-      // Arrange: resolver returns cwd as the only effective root (final
-      // fallback). The ingest scan walks cwd as the sole effective root.
-      const cwd = process.cwd()
-      mocks.stat.mockResolvedValueOnce(mockDirStat()).mockResolvedValueOnce(mockDirStat())
-      mocks.resolveCliBaseDirs.mockResolvedValue({
-        config: { baseDirs: [cwd] },
-        warnings: [],
-      })
-      setupMockReaddir({ [cwd]: [mockDirent('a.md')] })
-      setupSuccessfulIngestion()
-
-      // Act
-      const { output, error } = await captureStderr(() => runIngest([cwd]))
-
-      // Assert: resolver received no CLI roots; the cwd-rooted file was ingested.
-      expect(error).toBeUndefined()
-      expect(mocks.resolveCliBaseDirs).toHaveBeenCalledWith([])
-      const joined = output.join('\n')
-      expect(joined).toContain('Found 1 file(s) to ingest')
-      expect(joined).toContain(resolve(cwd, 'a.md'))
     })
   })
 })

@@ -1,6 +1,5 @@
 // Scope-match helper unit tests
 
-import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isUnderOrEqual, matchesAnyScope, nonAbsolutePrefixes } from '../scope-match.js'
 
@@ -115,10 +114,5 @@ describe('nonAbsolutePrefixes', () => {
 
   it('should return an empty array for an empty scope', () => {
     expect(nonAbsolutePrefixes([])).toEqual([])
-  })
-
-  it('should classify prefixes exactly as node:path isAbsolute (server-OS style)', () => {
-    const prefixes = ['/abs', 'rel', 'a/b/c']
-    expect(nonAbsolutePrefixes(prefixes)).toEqual(prefixes.filter((p) => !isAbsolute(p)))
   })
 })

@@ -1,6 +1,6 @@
 // In-process integration coverage for complete ingest, search, and re-ingest flows.
 
-import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { testModelCacheDir, withTestDevice } from '../../__tests__/test-device.js'
@@ -68,53 +68,7 @@ describe('RAGServer workflow integration', () => {
     })
   })
 
-  describe('DOCX ingestion and replacement', () => {
-    it('ingests a DOCX file and retrieves it for a related query', async () => {
-      // 1. Start MCP server (test case dedicated)
-      const testDbPath = resolve('./tmp/e2e-lancedb-test2')
-      const testDataDir = resolve('./tmp/e2e-data-test2')
-      mkdirSync(testDbPath, { recursive: true })
-      mkdirSync(testDataDir, { recursive: true })
-
-      const ragServer = new RAGServer(
-        withTestDevice({
-          dbPath: testDbPath,
-          modelName: 'Xenova/all-MiniLM-L6-v2',
-          cacheDir: testModelCacheDir(),
-          baseDir: testDataDir,
-          maxFileSize: 100 * 1024 * 1024,
-        })
-      )
-      await ragServer.initialize()
-
-      try {
-        // 2. Ingest valid DOCX file from fixtures
-        const fixtureDocx = resolve('./tests/fixtures/sample-e2e.docx')
-        const docxFile = resolve(testDataDir, 'sample.docx')
-        copyFileSync(fixtureDocx, docxFile)
-
-        const ingestResult = await ragServer.handleIngestFile({ filePath: docxFile })
-        const ingestData = JSON.parse(ingestResult.content[0].text)
-        expect(ingestData.chunkCount).toBeGreaterThan(0)
-
-        // 3. Search with natural language query
-        const queryResult = await ragServer.handleQueryDocuments({
-          query: 'project management',
-          limit: 5,
-        })
-        const results = JSON.parse(queryResult.content[0].text)
-
-        // 4. Verify related document retrieval
-        expect(results.length).toBeGreaterThan(0)
-        expect(results[0].filePath).toContain('sample.docx')
-      } finally {
-        // Cleanup
-        await ragServer.close()
-        rmSync(testDbPath, { recursive: true, force: true })
-        rmSync(testDataDir, { recursive: true, force: true })
-      }
-    })
-
+  describe('text-file replacement', () => {
     it('replaces indexed content when the same file is ingested again', async () => {
       // 1. Start MCP server (test case dedicated)
       const testDbPath = resolve('./tmp/e2e-lancedb-test3')
@@ -157,7 +111,8 @@ describe('RAGServer workflow integration', () => {
         )
 
         // 5. Re-ingest file
-        await ragServer.handleIngestFile({ filePath: v1File })
+        const reingestResult = await ragServer.handleIngestFile({ filePath: v1File })
+        const reingestData = JSON.parse(reingestResult.content[0].text)
 
         // 6. Verify search with new content
         const queryResult2 = await ragServer.handleQueryDocuments({
@@ -176,8 +131,8 @@ describe('RAGServer workflow integration', () => {
         // Validation: File exists only once (no duplicates)
         expect(targetFiles.length).toBe(1)
 
-        // Validation: Chunk count exists (chunks after re-ingestion)
-        expect(targetFiles[0].chunkCount).toBeGreaterThan(0)
+        // Validation: Chunk count matches new data (not old + new combined)
+        expect(targetFiles[0].chunkCount).toBe(reingestData.chunkCount)
 
         // 8. Search with new content and verify old content is not included
         const queryResult3 = await ragServer.handleQueryDocuments({

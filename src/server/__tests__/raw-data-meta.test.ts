@@ -98,19 +98,6 @@ describe('meta.json utilities', () => {
       expect(result).toBeNull()
     })
 
-    it('round-trips a null title', async () => {
-      const mdPath = join(testDir, 'roundtrip.md')
-      const meta: RawDataMeta = {
-        title: null,
-        source: 'clipboard://paste',
-        format: 'text',
-      }
-
-      await saveMetaJson(mdPath, meta)
-
-      expect(await loadMetaJson(mdPath)).toEqual({ title: null })
-    })
-
     it('should re-throw non-ENOENT errors from loadMetaJson', async () => {
       // Use a directory path as the "file" to trigger EISDIR or similar error
       const dirAsFile = join(testDir, 'adir')

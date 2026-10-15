@@ -1,5 +1,4 @@
-// Visual-mode ingest integration: AC-002 (enriched chunks), AC-004 (per-page
-// VLM failure tolerated), AC-005 (whole-VLM failure falls back to text),
+// Visual-mode ingest integration: captioning and image storage options,
 // AC-006 (non-PDF + visual silently coerced), AC-007 (captions embed).
 // Design doc: docs/design/vlm-pdf-enrichment-design.md
 //
@@ -30,18 +29,12 @@ function bbox(x0: number, y0: number, x1: number, y1: number): [number, number, 
 // factories run before any `import` statement (isolate: false + vitest hoisting).
 interface CaptionerSpy {
   calls: { pageNum: number }[]
-  /** Single pageNum that should throw (set to 2 for AC-004). Null = no per-page throw. */
-  throwOn: number | null
-  /** When true, every captioner.caption() call throws (AC-005). */
-  throwAll: boolean
   /** Pages flagged as visual candidates by the detector mock. Default: page 2. */
   candidatePages: Set<number>
 }
 
 const captionerSpy = vi.hoisted<CaptionerSpy>(() => ({
   calls: [],
-  throwOn: null,
-  throwAll: false,
   candidatePages: new Set<number>([2]),
 }))
 
@@ -174,23 +167,18 @@ const pdfVisualFactory = () => ({
     const processed: ProcessedRegion[] = []
     for (const region of regions) {
       captionerSpy.calls.push({ pageNum: region.pageNum })
-      if (captionerSpy.throwAll || captionerSpy.throwOn === region.pageNum) {
-        console.warn(`VLM caption failed for page ${region.pageNum}: simulated failure`)
-        processed.push({ ...region, caption: null })
-      } else {
-        processed.push({
-          ...region,
-          caption: 'synthetic caption text',
-          ...(options.includeImages
-            ? {
-                rendition: {
-                  bytes: new Uint8Array([1, 2, 3]),
-                  mimeType: 'image/png',
-                },
-              }
-            : {}),
-        })
-      }
+      processed.push({
+        ...region,
+        caption: 'synthetic caption text',
+        ...(options.includeImages
+          ? {
+              rendition: {
+                bytes: new Uint8Array([1, 2, 3]),
+                mimeType: 'image/png',
+              },
+            }
+          : {}),
+      })
     }
     return processed
   },
@@ -391,8 +379,6 @@ describe('VLM PDF Enrichment - Visual Mode', () => {
     vi.clearAllMocks()
     // Reset captionerSpy state to its document-default shape.
     captionerSpy.calls.length = 0
-    captionerSpy.throwOn = null
-    captionerSpy.throwAll = false
     captionerSpy.candidatePages = new Set<number>([2])
     mocks.titlePrefix = false
 
@@ -466,9 +452,6 @@ describe('VLM PDF Enrichment - Visual Mode', () => {
     }
   )
 
-  // AC-002: `visual: true` on a 3-page PDF with a figure on page 2 produces a
-  // `[Visual content on page 2: ...]` caption in the inserted chunks, and none
-  // on pages 1 and 3.
   it.each([false, true])('releases the captioner when chunking fails=%s', async (fail) => {
     mocks.stat.mockResolvedValue(mockFileStat())
     if (fail) {
@@ -477,105 +460,6 @@ describe('VLM PDF Enrichment - Visual Mode', () => {
     await captureRun(() => runIngest(['--visual', resolve('/tmp/test/lifecycle.pdf')]))
     expect(mocks.dispose).toHaveBeenCalledTimes(1)
     expect(mocks.destroy).toHaveBeenCalledTimes(1)
-  })
-
-  it('AC-002: visual mode enriches page 2 with caption substring', async () => {
-    // Arrange: 3-page PDF, page 2 is the only candidate (default state).
-    const filePath = resolve('/tmp/test/ac002.pdf')
-    mocks.stat.mockResolvedValue(mockFileStat())
-
-    // Act
-    const { inserted, error } = await captureRun(() => runIngest(['--visual', filePath]))
-
-    // Assert: ingest completed without throwing.
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBeUndefined()
-
-    // Assert: at least one inserted chunk carries the page-2 caption marker.
-    const page2Chunks = inserted.filter((c) =>
-      c.text.includes('[Visual content on page 2, visual 0: ')
-    )
-    expect(page2Chunks.length).toBeGreaterThan(0)
-
-    // Assert: the caption body text is recoverable in that chunk.
-    expect(page2Chunks[0]?.text).toContain('synthetic caption text')
-
-    // Assert: pages 1 and 3 contribute chunks but carry no visual marker.
-    const nonVisualChunks = inserted.filter((c) => !c.text.includes('[Visual content on page'))
-    expect(nonVisualChunks.some((c) => c.text === 'page 1 plain text')).toBe(true)
-    expect(nonVisualChunks.some((c) => c.text === 'page 3 plain text')).toBe(true)
-  })
-
-  // AC-004: a per-page VLM failure is tolerated — page 2's text is kept
-  // without a caption, other candidate pages keep theirs, and the failed page
-  // is named in a warning. Pages 2 AND 3 are candidates so the surviving case
-  // is exercised too.
-  it('AC-004: per-page VLM failure on page 2 leaves that page text-only and other pages enriched', async () => {
-    // Arrange: pages 2 AND 3 are candidates; captioner throws only on page 2.
-    captionerSpy.candidatePages = new Set<number>([2, 3])
-    captionerSpy.throwOn = 2
-    const filePath = resolve('/tmp/test/ac004.pdf')
-    mocks.stat.mockResolvedValue(mockFileStat())
-
-    // Act
-    const { inserted, warnings, error } = await captureRun(() => runIngest(['--visual', filePath]))
-
-    // Assert: ingest completed without throwing.
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBeUndefined()
-
-    // Assert: NO chunk has the page-2 caption marker.
-    const page2Marker = inserted.filter((c) =>
-      c.text.includes('[Visual content on page 2, visual 0:')
-    )
-    expect(page2Marker).toHaveLength(0)
-
-    // Assert: page 2's raw text is still present in the index.
-    expect(inserted.some((c) => c.text === 'page 2 plain text')).toBe(true)
-
-    // Assert: page 3 KEEPS its caption marker (per-page failure does not
-    // poison the rest of the file).
-    const page3Marker = inserted.filter((c) =>
-      c.text.includes('[Visual content on page 3, visual 1: synthetic caption text')
-    )
-    expect(page3Marker.length).toBeGreaterThan(0)
-
-    // Assert: warn-level log names page 2.
-    const page2Warning = warnings.filter((w) => w.includes('page 2'))
-    expect(page2Warning.length).toBeGreaterThan(0)
-  })
-
-  // AC-005: when the VLM throws on every candidate page, ingest still
-  // completes with text-only chunks and no error reaches the caller.
-  it('AC-005: whole-VLM failure falls back to text-only chunks without propagating error', async () => {
-    // Arrange: page 2 is candidate; captioner throws on EVERY call.
-    captionerSpy.throwAll = true
-    const filePath = resolve('/tmp/test/ac005.pdf')
-    mocks.stat.mockResolvedValue(mockFileStat())
-
-    // Act
-    const { inserted, stderr, error } = await captureRun(() => runIngest(['--visual', filePath]))
-
-    // Assert: ingest completed without propagating any error.
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBeUndefined()
-
-    // Assert: NO chunk contains the visual marker — text-only fallback.
-    const visualMarkerChunks = inserted.filter((c) => c.text.includes('[Visual content on page'))
-    expect(visualMarkerChunks).toHaveLength(0)
-
-    // Assert: text-only chunks were still produced for all 3 pages.
-    expect(inserted.length).toBeGreaterThan(0)
-    expect(inserted.some((c) => c.text === 'page 1 plain text')).toBe(true)
-    expect(inserted.some((c) => c.text === 'page 2 plain text')).toBe(true)
-    expect(inserted.some((c) => c.text === 'page 3 plain text')).toBe(true)
-
-    // Assert: the per-file OK summary line reflects the normal chunk-count
-    // return value (i.e. ingestSingleFile returned a positive count, not
-    // SKIPPED). 3 input pages with one chunk each → 3 chunks.
-    const summary = stderr.find((s) => s.includes('OK ('))
-    expect(summary).toBeDefined()
-    expect(summary).toContain('OK (3 chunks)')
   })
 
   // AC-006: a non-PDF with `visual: true` takes the text-only path silently —

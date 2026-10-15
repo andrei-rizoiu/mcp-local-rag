@@ -20,7 +20,7 @@ import { posix, win32 } from 'node:path'
  * must still yield a key. This is an internal reconciliation identity — never a
  * replacement for the verbatim stored spellings used for deletion.
  */
-export function toSyncPathKey(path: string, platform: NodeJS.Platform = process.platform): string {
+export function toSyncPathKey(path: string, platform: NodeJS.Platform): string {
   if (platform === 'win32') {
     return win32.resolve(path).toLowerCase()
   }

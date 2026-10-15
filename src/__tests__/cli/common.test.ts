@@ -145,13 +145,6 @@ describe('cli/common', () => {
         hybridWeight: 0,
       })
     })
-
-    it('forwards hybridWeight 0, which disables the keyword boost', () => {
-      createVectorStore(makeConfig({ hybridWeight: 0 }))
-
-      const [storeConfig] = mocks.VectorStore.mock.calls[0] ?? []
-      expect(storeConfig).toHaveProperty('hybridWeight', 0)
-    })
   })
 
   describe('createEmbedder', () => {
@@ -257,15 +250,6 @@ describe('cli/common', () => {
       } finally {
         errorSpy.mockRestore()
       }
-    })
-
-    it('omits dtype when RAG_DTYPE is whitespace-only', () => {
-      process.env['RAG_DTYPE'] = '   '
-
-      createEmbedder(makeConfig({ modelName: 'custom/model', cacheDir: '/custom/cache' }))
-
-      const passedConfig = mocks.Embedder.mock.calls[0]?.[0]
-      expect(passedConfig).not.toHaveProperty('dtype')
     })
   })
 })

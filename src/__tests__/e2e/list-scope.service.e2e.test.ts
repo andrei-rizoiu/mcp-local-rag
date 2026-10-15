@@ -1,6 +1,6 @@
 // E2E-1: `list --scope` service-integration E2E (Final Phase).
 //
-// AC: AC2 (CLI `list` accepts repeatable `--scope`) / AC3 (files[] restricted
+// AC: AC2 (CLI `list` accepts `--scope`) / AC3 (files[] restricted
 //     exact-or-descendant on the scan path) / AC6 (raw-data sources always
 //     emitted; a real-file ingested entry outside scope appears in neither
 //     files[] nor sources[]).
@@ -12,10 +12,10 @@
 //     fixture + RAGServer (fixture ingest, real embed) + shared pre-warmed model cache
 //
 // This E2E asserts BEHAVIORAL CORRECTNESS only: the spawn timeout is a perf
-// property (issue #165) and is NOT asserted here. The layered pushdown PROOFS
-// (readdir EACCES mock/spy + realpathForMatch spy) live in the integration lane
-// (INT-1/INT-2/INT-3); this E2E confirms the assembled CLI produces the scoped
-// result through a real process.
+// property (issue #165) and is NOT asserted here. The pushdown PROOF (readdir
+// EACCES mock/spy) lives in `src/utils/__tests__/scope-scan-pushdown.int.test.ts`;
+// this E2E confirms the assembled CLI produces the scoped result through a real
+// process.
 //
 // Spawn convention: `process.execPath --import tsx src/index.ts ...`, mirroring
 // `src/__tests__/cli/entry-routing.test.ts` (the repo's spawned-CLI-in-default-
@@ -115,7 +115,7 @@ describe('E2E-1: spawned CLI `list --scope` — scoped files[], raw-data sources
     writeFileSync(inScopeFile, 'In-scope file content for the list-scope E2E. '.repeat(20))
     writeFileSync(deepFile, 'Deep in-scope file content for the list-scope E2E. '.repeat(20))
     writeFileSync(outScopeIngested, 'Out-of-scope ingested file content. '.repeat(20))
-    writeFileSync(secondScopeFile, 'Second-scope file content for the union case. '.repeat(20))
+    writeFileSync(secondScopeFile, 'Second-scope file content. '.repeat(20))
 
     // Ingest the fixture in-process (real embedder + real LanceDB). The spawned
     // `list` later reads this same persisted dbPath; listing needs no embedder.
@@ -178,33 +178,6 @@ describe('E2E-1: spawned CLI `list --scope` — scoped files[], raw-data sources
       const rawEntry = parsed.sources.find((s: { source?: string }) => s.source === rawSource)
       expect(rawEntry).toBeDefined()
       expect(sourcePaths).not.toContain(outScopeIngested)
-    },
-    SPAWN_TIMEOUT_MS
-  )
-
-  it(
-    'unions results across repeated --scope flags',
-    () => {
-      const run = runListCli([
-        '--db-path',
-        dbPath,
-        '--cache-dir',
-        cacheDir,
-        'list',
-        '--base-dir',
-        dataDir,
-        '--scope',
-        inScopeDir,
-        '--scope',
-        secondScopeDir,
-      ])
-
-      const parsed = parseSuccessfulListOutput(run)
-      const filePaths = parsed.files.map((f) => f.filePath)
-
-      expect(filePaths).toContain(inScopeFile)
-      expect(filePaths).toContain(secondScopeFile)
-      expect(filePaths).not.toContain(outScopeIngested)
     },
     SPAWN_TIMEOUT_MS
   )

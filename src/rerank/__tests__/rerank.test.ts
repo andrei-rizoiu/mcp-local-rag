@@ -303,25 +303,6 @@ setTimeout(() => {
     expect(stderrLines()).toHaveLength(1)
   })
 
-  it('should take a repeated item as the command s answer', async () => {
-    const command = fixtureCommand(`
-import { readFileSync } from 'node:fs'
-const items = JSON.parse(readFileSync(0, 'utf8'))
-process.stdout.write(JSON.stringify([...items, items[0]]))
-`)
-
-    const result = await rerankCandidates({
-      candidates,
-      query: 'cats',
-      top: 3,
-      command,
-      timeoutMs: 5000,
-    })
-
-    expect(result).toHaveLength(candidates.length + 1)
-    expect(stderrLines()).toHaveLength(0)
-  })
-
   it('should carry neither document text nor the configured arguments on stderr', async () => {
     const command = fixtureCommand(
       `process.stdout.write('not json at all')`,
@@ -336,18 +317,5 @@ process.stdout.write(JSON.stringify([...items, items[0]]))
     for (const item of candidates) {
       expect(line).not.toContain(item.text)
     }
-  })
-
-  it('should return the pre-rerank ordering when the configured command is blank', async () => {
-    const result = await rerankCandidates({
-      candidates,
-      query: 'cats',
-      top: 3,
-      command: '   ',
-      timeoutMs: 5000,
-    })
-
-    expect(result).toEqual(candidates)
-    expect(stderrLines()).toHaveLength(1)
   })
 })

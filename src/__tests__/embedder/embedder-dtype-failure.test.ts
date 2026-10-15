@@ -113,7 +113,7 @@ describe('Embedder dtype failure-path enrichment', () => {
     expect(err.message).not.toMatch(/ENOTFOUND/)
   })
 
-  it('does not enumerate dtypes when the requested dtype IS available (still throws the load error)', async () => {
+  it('keeps the native load error when the requested dtype IS available', async () => {
     mocks.pipeline.mockRejectedValue(new Error(LOAD_FAILURE_MESSAGE))
     mocks.getAvailableDtypes.mockResolvedValue(['fp32', 'fp16', 'q8'])
     const embedder = makeEmbedder('fp16')

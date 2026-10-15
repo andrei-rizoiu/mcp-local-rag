@@ -458,22 +458,6 @@ function selectRoots(input: ResolveBaseDirsInput): SelectRootsResult {
 }
 
 // ============================================
-// Legacy single-root accessor
-// ============================================
-
-/**
- * The legacy single-root `baseDir`: the first effective root after pruning.
- * Holds only for a config built via {@link dedupAndPruneRoots}.
- */
-export function legacyBaseDir(config: BaseDirsConfig): string {
-  const first = config.baseDirs[0]
-  if (first === undefined) {
-    throw new BaseDirsConfigError('BaseDirsConfig must contain at least one base directory.')
-  }
-  return first
-}
-
-// ============================================
 // Private helpers
 // ============================================
 

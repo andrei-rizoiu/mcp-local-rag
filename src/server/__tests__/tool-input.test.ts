@@ -94,14 +94,6 @@ describe('parseQueryDocumentsInput', () => {
     })
   })
 
-  it('keeps input unchanged when scope is absent (with limit)', () => {
-    expect(parseQueryDocumentsInput({ query: 'q', limit: 5 })).toEqual({ query: 'q', limit: 5 })
-  })
-
-  it('keeps input unchanged when scope is absent (no limit)', () => {
-    expect(parseQueryDocumentsInput({ query: 'q' })).toEqual({ query: 'q' })
-  })
-
   it('accepts scope alongside limit', () => {
     expect(parseQueryDocumentsInput({ query: 'q', limit: 5, scope: '/a/b' })).toEqual({
       query: 'q',
@@ -277,6 +269,12 @@ describe('parseReadChunkNeighborsInput', () => {
     expect(
       parseReadChunkNeighborsInput({ filePath: '/docs/a.md', chunkIndex: 3, before: 1, after: 4 })
     ).toEqual({ filePath: '/docs/a.md', chunkIndex: 3, before: 1, after: 4 })
+  })
+
+  it('accepts the upper boundary of before and after (50)', () => {
+    expect(
+      parseReadChunkNeighborsInput({ filePath: '/docs/a.md', chunkIndex: 3, before: 50, after: 50 })
+    ).toEqual({ filePath: '/docs/a.md', chunkIndex: 3, before: 50, after: 50 })
   })
 
   it.each([

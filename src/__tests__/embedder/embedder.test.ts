@@ -28,7 +28,7 @@ function makeEmbedder(device?: string): Embedder {
 
 describe('Embedder', () => {
   describe('embed() input validation', () => {
-    it('rejects empty string before initializing the model', async () => {
+    it('rejects empty text, alone or in a batch, before initializing the model', async () => {
       // Use a deliberately broken device so init *would* fail if it were attempted.
       // The empty-text guard must short-circuit before we get there.
       const embedder = makeEmbedder('definitely-not-a-real-device')
@@ -36,6 +36,11 @@ describe('Embedder', () => {
       const err = asError(await embedder.embed('').catch((e) => e))
       expect(err).toBeInstanceOf(EmbeddingError)
       expect(err.message).toBe('Cannot generate embedding for empty text')
+
+      // An empty element in a batch is not re-wrapped with batch guidance.
+      const batchErr = asError(await embedder.embedBatch(['valid', '']).catch((e) => e))
+      expect(batchErr).toBeInstanceOf(EmbeddingError)
+      expect(batchErr.message).toBe('Cannot generate embedding for empty text')
     })
   })
 
@@ -45,15 +50,6 @@ describe('Embedder', () => {
 
       // No init attempt → no device error surfaces.
       await expect(embedder.embedBatch([])).resolves.toEqual([])
-    })
-
-    it('rejects an empty batch element without re-wrapping it with batch guidance', async () => {
-      const embedder = makeEmbedder()
-
-      const err = asError(await embedder.embedBatch(['valid', '']).catch((e) => e))
-      expect(err).toBeInstanceOf(EmbeddingError)
-      expect(err.message).toBe('Cannot generate embedding for empty text')
-      expect(err.message).not.toMatch(/Failed to generate batch embeddings/)
     })
 
     it('produces per-text vectors equivalent to embed() (true batching)', async () => {

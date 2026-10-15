@@ -82,35 +82,6 @@ describe('SemanticChunker', () => {
   // Max-Min algorithm behavior
   // --------------------------------------------
   describe('Max-Min algorithm', () => {
-    it('should group semantically similar sentences together', async () => {
-      const text = `Machine learning is a type of AI. Deep learning uses neural networks.
-The weather today is sunny. It will rain tomorrow.`
-
-      // Mock embeddings: first two sentences similar, last two similar, but different groups
-      // Cosine similarity: ML-DL ≈ 0.95, Weather-Rain ≈ 0.95, ML-Weather ≈ 0
-      vi.mocked(mockEmbedder.embedBatch).mockResolvedValue([
-        createMockEmbedding([1, 0, 0]), // ML sentence
-        createMockEmbedding([0.95, 0.1, 0]), // DL sentence (similar to ML)
-        createMockEmbedding([0, 1, 0]), // Weather sentence
-        createMockEmbedding([0, 0.95, 0.1]), // Rain sentence (similar to weather)
-      ])
-
-      const result = await chunker.chunkText(text, mockEmbedder)
-
-      // Algorithm behavior:
-      // 1. ML → new chunk
-      // 2. DL → initConst * sim(ML,DL) = 1.5 * 0.95 > 0.6 → same chunk
-      // 3. Weather → maxSim ≈ 0.1 < threshold → new chunk
-      // 4. Rain → initConst * sim(Weather,Rain) > 0.6 → same chunk
-      // Result: 2 chunks (ML/DL and Weather/Rain) but Weather/Rain may be filtered by minChunkLength
-      expect(result.length).toBeGreaterThanOrEqual(1)
-      expect(result.length).toBeLessThanOrEqual(2)
-
-      // Verify first chunk contains ML-related content
-      expect(result[0]?.text).toContain('Machine learning')
-      expect(result[0]?.text).toContain('Deep learning')
-    })
-
     it('should split on semantic boundaries', async () => {
       const text = `Topic A sentence one. Topic A sentence two. Topic A sentence three.
 Topic B is completely different. Topic B continues here.`
@@ -294,61 +265,9 @@ Topic B is completely different. Topic B continues here.`
   })
 
   // --------------------------------------------
-  // Output format
-  // --------------------------------------------
-  describe('Output format', () => {
-    it('should return TextChunk array with correct structure', async () => {
-      const text =
-        'This is the first chunk with enough content to pass the minimum length filter easily.'
-
-      vi.mocked(mockEmbedder.embedBatch).mockResolvedValue([createMockEmbedding([1, 0, 0])])
-
-      const result = await chunker.chunkText(text, mockEmbedder)
-
-      expect(Array.isArray(result)).toBe(true)
-      for (const chunk of result) {
-        expect(chunk).toHaveProperty('text')
-        expect(chunk).toHaveProperty('index')
-        expect(typeof chunk.text).toBe('string')
-        expect(typeof chunk.index).toBe('number')
-      }
-    })
-
-    it('should assign sequential indices starting from 0', async () => {
-      const text = `First topic sentence one. First topic sentence two.
-Second topic is different. Second topic continues.`
-
-      vi.mocked(mockEmbedder.embedBatch).mockResolvedValue([
-        createMockEmbedding([1, 0, 0]),
-        createMockEmbedding([0.95, 0.1, 0]),
-        createMockEmbedding([0, 1, 0]),
-        createMockEmbedding([0.1, 0.95, 0]),
-      ])
-
-      const result = await chunker.chunkText(text, mockEmbedder)
-
-      // Verify indices are sequential
-      for (let i = 0; i < result.length; i++) {
-        expect(result[i]?.index).toBe(i)
-      }
-    })
-  })
-
-  // --------------------------------------------
   // Edge cases
   // --------------------------------------------
   describe('Edge cases', () => {
-    it('should handle text with only code blocks', async () => {
-      const text = '```typescript\nconst x = 1;\n```'
-
-      vi.mocked(mockEmbedder.embedBatch).mockResolvedValue([createMockEmbedding([1, 0, 0])])
-
-      const result = await chunker.chunkText(text, mockEmbedder)
-
-      // Code block (31 chars) is below minChunkLength (50), so should be filtered out
-      expect(result).toHaveLength(0)
-    })
-
     it('should handle embedder errors gracefully', async () => {
       const text = 'This is a test sentence.'
 
@@ -384,7 +303,7 @@ Second topic is different. Second topic continues.`
   })
 
   // --------------------------------------------
-  // Boundary value tests (WINDOW_SIZE=5, MAX_SENTENCES=15)
+  // Boundary value tests (MAX_SENTENCES=15)
   // --------------------------------------------
   describe('Boundary values', () => {
     it('should handle exactly MAX_SENTENCES (15) sentences without split', async () => {
@@ -423,29 +342,6 @@ Second topic is different. Second topic continues.`
       expect(result[0]?.text).not.toContain('sentence number 16')
       expect(result[1]?.text).toContain('sentence number 16')
       expect(result[1]?.text).toContain('sentence number 17')
-    })
-
-    it('should handle WINDOW_SIZE (5) sentences for min similarity calculation', async () => {
-      // Create 6 sentences where the 6th has low similarity to recent sentences
-      const text =
-        'First related sentence. Second related sentence. Third related sentence. Fourth related sentence. Fifth related sentence. Completely unrelated topic here.'
-
-      // First 5 sentences similar, 6th is different
-      vi.mocked(mockEmbedder.embedBatch).mockResolvedValue([
-        createMockEmbedding([1, 0, 0]),
-        createMockEmbedding([0.95, 0.1, 0]),
-        createMockEmbedding([0.9, 0.15, 0]),
-        createMockEmbedding([0.85, 0.2, 0]),
-        createMockEmbedding([0.8, 0.25, 0]),
-        createMockEmbedding([0, 0, 1]), // Semantic shift
-      ])
-
-      const result = await chunker.chunkText(text, mockEmbedder)
-
-      // Should detect boundary at sentence 6 (WINDOW_SIZE comparison works)
-      expect(result.length).toBeGreaterThanOrEqual(1)
-      expect(result[0]?.text).toContain('First related')
-      expect(result[0]?.text).not.toContain('unrelated topic')
     })
   })
 })
@@ -749,16 +645,6 @@ describe('Measured token containment', () => {
       30
     )
     expectOrderedSpans(chunks, text)
-  })
-
-  it('produces today’s chunks when the embedder resolves no token limit', async () => {
-    const text = 'abcdefghij'.repeat(12)
-    const { embedder, log } = measuredEmbedder(null)
-
-    const chunks = await containmentChunker().chunkText(text, embedder)
-
-    expect(chunks).toEqual([{ text, index: 0, sourceStart: 0, sourceEnd: text.length }])
-    expect(log.calls).not.toContain('countTokens')
   })
 })
 

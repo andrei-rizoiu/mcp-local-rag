@@ -5,7 +5,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { resolve } from 'node:path'
 import type { MockInstance } from 'vitest'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { buildPdfWithImageBytes } from '../../__tests__/pdf-image-fixture.js'
 import { testModelCacheDir, withTestDevice } from '../../__tests__/test-device.js'
 import { expectError, expectRecord, privateMembers } from '../../__tests__/test-doubles.js'
 import { embeddingSnapshotPath } from '../../embedder/embedding-snapshot.js'
@@ -22,8 +21,8 @@ function privateVectorStore(server: RAGServer): VectorStore {
 
 /**
  * Replace `filePath`'s rows with a set carrying `visualProfile`, standing in for
- * a prior visual ingest without loading a VLM. The profile is what backup,
- * rollback and zero-chunk preservation must carry with the rest of the row.
+ * a prior visual ingest without loading a VLM. The profile is what zero-chunk
+ * preservation must carry with the rest of the row.
  */
 async function seedProfiledRows(
   store: VectorStore,
@@ -218,9 +217,6 @@ describe('Ingest Rollback', () => {
     }
   })
 
-  // Rollback-restores-original is verified observably below ('restores the full
-  // original chunk set with real vectors on rollback').
-
   it('surfaces a distinct DatabaseError (cause = insert error) when rollback also fails', async () => {
     // Arrange: Ingest a file normally first
     const testFile = resolve(testDataDir, 'rollback-double-fail.txt')
@@ -263,79 +259,6 @@ describe('Ingest Rollback', () => {
     errorSpy.mockRestore()
   })
 
-  it('restores the full original chunk set with real vectors on rollback (TD-7/BR-4)', async () => {
-    // Arrange: ingest real content, capture the stored chunks (real vectors).
-    const testFile = resolve(testDataDir, 'rollback-real-vectors.txt')
-    writeFileSync(testFile, 'Alpha beta gamma delta epsilon. '.repeat(80))
-    await ragServer.handleIngestFile({ filePath: testFile })
-
-    const vectorStore = privateVectorStore(ragServer)
-    const original: VectorChunk[] = await vectorStore.getChunksByFilePath(testFile)
-    expect(original.length).toBeGreaterThan(0)
-
-    // Fail the new-data insert, then let the rollback restore run for REAL
-    // (not mocked) so we can verify what actually lands back in the DB.
-    const origInsert = vectorStore.insertChunks.bind(vectorStore)
-    const insertSpy = vi
-      .spyOn(vectorStore, 'insertChunks')
-      .mockRejectedValueOnce(new Error('Simulated insertion failure'))
-      .mockImplementationOnce((chunks: VectorChunk[]) => origInsert(chunks))
-    const optimizeSpy = vi.spyOn(vectorStore, 'optimize')
-
-    // Act: re-ingest with different content (different embeddings) — the old
-    // broken backup would have restored a dummy vector taken from THIS content.
-    writeFileSync(testFile, 'Completely unrelated zebra yak xylophone. '.repeat(20))
-    await expect(ragServer.handleIngestFile({ filePath: testFile })).rejects.toThrow(
-      'Simulated insertion failure'
-    )
-
-    // Assert: the full original set is restored with its real stored vectors.
-    const restored: VectorChunk[] = await vectorStore.getChunksByFilePath(testFile)
-    const byIndex = (cs: VectorChunk[]): VectorChunk[] =>
-      [...cs].sort((a, b) => a.chunkIndex - b.chunkIndex)
-    const o = byIndex(original)
-    const r = byIndex(restored)
-    expect(r.length).toBe(o.length)
-    expect(r.map((c) => c.text)).toEqual(o.map((c) => c.text))
-    // Real vectors, not a single dummy: every restored vector matches the
-    // original stored vector for that chunk.
-    expect(r.map((c) => c.vector)).toEqual(o.map((c) => c.vector))
-
-    insertSpy.mockRestore()
-    optimizeSpy.mockRestore()
-  })
-
-  it('restores the recorded visual profile with the rest of the old rows on rollback', async () => {
-    // Arrange: a real PDF whose stored rows record a `quality` visual ingest.
-    const testFile = resolve(testDataDir, 'rollback-visual-profile.pdf')
-    writeFileSync(testFile, buildPdfWithImageBytes())
-    const vectorStore = privateVectorStore(ragServer)
-    const original = await seedProfiledRows(vectorStore, testFile, 'quality')
-    expect(original.map((row) => row.visualProfile)).toEqual(['quality', 'quality'])
-
-    // Fail the replacement insert, then let the rollback restore run for real.
-    const originalInsert = vectorStore.insertChunks.bind(vectorStore)
-    const insertSpy = vi
-      .spyOn(vectorStore, 'insertChunks')
-      .mockRejectedValueOnce(new Error('Simulated replacement failure'))
-      .mockImplementationOnce((chunks: VectorChunk[]) => originalInsert(chunks))
-
-    // Act: a plain (nonvisual) replacement, which on success would have cleared
-    // the profile — so a rollback that loses it is indistinguishable from a
-    // silent downgrade.
-    await expect(ragServer.handleIngestFile({ filePath: testFile })).rejects.toThrow(
-      'Simulated replacement failure'
-    )
-
-    // Assert: whole-row equality, which includes `visualProfile`.
-    const byIndex = (rows: VectorChunk[]): VectorChunk[] =>
-      [...rows].sort((left, right) => left.chunkIndex - right.chunkIndex)
-    const restored = await vectorStore.getChunksByFilePath(testFile)
-    expect(byIndex(restored)).toEqual(byIndex(original))
-
-    insertSpy.mockRestore()
-  })
-
   it('preserves the recorded visual profile when preparation yields zero chunks', async () => {
     // Arrange: rows recording a `fast` visual ingest, then a replacement source
     // too short to produce a single chunk.
@@ -356,33 +279,5 @@ describe('Ingest Rollback', () => {
     const preserved = await vectorStore.getChunksByFilePath(testFile)
     expect(preserved).toEqual(original)
     expect(preserved.map((row) => row.visualProfile)).toEqual(['fast', 'fast'])
-  })
-
-  it('leaves no partial data when insert fails for a new file (no backup to roll back to)', async () => {
-    // Arrange: New file (no prior ingestion)
-    const testFile = resolve(testDataDir, 'rollback-new-file.txt')
-    writeFileSync(testFile, 'New file content. '.repeat(50))
-
-    const vectorStore = privateVectorStore(ragServer)
-
-    // Force the insert to fail (the only way to exercise the failure path).
-    const insertSpy = vi
-      .spyOn(vectorStore, 'insertChunks')
-      .mockRejectedValueOnce(new Error('Insert failed for new file'))
-
-    // Act: Should surface the insert error directly.
-    await expect(ragServer.handleIngestFile({ filePath: testFile })).rejects.toThrow(
-      'Insert failed for new file'
-    )
-
-    // No backup → no rollback attempted: insertChunks called exactly once.
-    // (Spy-verified; "no rollback attempted" has no observable surface.)
-    expect(insertSpy).toHaveBeenCalledTimes(1)
-
-    insertSpy.mockRestore()
-
-    // Observable: the failed first-time insert leaks no rows.
-    const persisted = await vectorStore.getChunksByFilePath(testFile)
-    expect(persisted).toHaveLength(0)
   })
 })

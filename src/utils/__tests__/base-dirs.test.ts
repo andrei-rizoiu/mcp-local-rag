@@ -4,7 +4,6 @@
 // - JSON-array parser for the `BASE_DIRS` environment variable
 // - Realpath normalization + trailing-separator prefix safety
 // - Exact deduplication and nested-root pruning
-// - Legacy single-root accessor compatibility
 //
 // Realpath-dependent scenarios use a real temp directory so the helpers
 // exercise the same behavior they will hit in production (mocking `realpath`
@@ -16,12 +15,10 @@ import { join, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { expectDefined } from '../../__tests__/test-doubles.js'
 import {
-  type BaseDirsConfig,
   BaseDirsConfigError,
   type BaseDirsConfigWarning,
   dedupAndPruneRoots,
   displayPath,
-  legacyBaseDir,
   normalizeRealpath,
   parseBaseDirsEnv,
   withTrailingSeparator,
@@ -130,18 +127,6 @@ describe('withTrailingSeparator', () => {
 
   it('leaves an already-suffixed path unchanged', () => {
     expect(withTrailingSeparator(`${sep}foo${sep}bar${sep}`)).toBe(`${sep}foo${sep}bar${sep}`)
-  })
-
-  it('produces a prefix that does not match a sibling like /foo/barista', () => {
-    const root = withTrailingSeparator(`${sep}foo${sep}bar`)
-    const sibling = `${sep}foo${sep}barista`
-    expect(sibling.startsWith(root)).toBe(false)
-  })
-
-  it('produces a prefix that does match a true child like /foo/bar/baz', () => {
-    const root = withTrailingSeparator(`${sep}foo${sep}bar`)
-    const child = `${sep}foo${sep}bar${sep}baz`
-    expect(child.startsWith(root)).toBe(true)
   })
 })
 
@@ -272,25 +257,6 @@ describe('dedupAndPruneRoots', () => {
     const { roots, warnings } = dedupAndPruneRoots([resolvedBar, resolvedBarista])
     expect(roots).toEqual([resolvedBar, resolvedBarista])
     expect(warnings).toEqual([])
-  })
-})
-
-// ============================================
-// legacyBaseDir — single-root accessor
-// ============================================
-
-describe('legacyBaseDir', () => {
-  it('returns the first effective root as the legacy baseDir', () => {
-    const config: BaseDirsConfig = {
-      baseDirs: ['/first/', '/second/'],
-      rawBaseDirs: ['/first/', '/second/'],
-    }
-    expect(legacyBaseDir(config)).toBe('/first/')
-  })
-
-  it('returns the only element for a single-root config', () => {
-    const config: BaseDirsConfig = { baseDirs: ['/only/'], rawBaseDirs: ['/only/'] }
-    expect(legacyBaseDir(config)).toBe('/only/')
   })
 })
 

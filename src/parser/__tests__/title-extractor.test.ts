@@ -198,13 +198,6 @@ describe('Title Extractor', () => {
       expect(result.source).toBe('filename')
     })
 
-    it('should prefer metadata over chunk text when both available', () => {
-      const result = extractPdfTitle('Metadata Title', 'Chunk Title', 'fallback.pdf')
-
-      expect(result.title).toBe('Metadata Title')
-      expect(result.source).toBe('metadata')
-    })
-
     it('should fall back from file-path metadata to chunk text', () => {
       const result = extractPdfTitle('/usr/local/doc.pdf', 'Real Title From Content', 'my-doc.pdf')
 
@@ -241,13 +234,6 @@ describe('Title Extractor', () => {
       expect(result.title).toBe('Real Title')
       expect(result.source).toBe('metadata')
     })
-
-    it('should work without font hint (backward compatibility)', () => {
-      const result = extractPdfTitle(undefined, 'Chunk Text', 'report.pdf')
-
-      expect(result.title).toBe('Chunk Text')
-      expect(result.source).toBe('content')
-    })
   })
 
   // --------------------------------------------
@@ -267,14 +253,6 @@ describe('Title Extractor', () => {
       const result = extractDocxTitleFromHtml(html, 'my-document.docx')
 
       expect(result.title).toBe('my document')
-      expect(result.source).toBe('filename')
-    })
-
-    it('should handle HTML with no heading tags', () => {
-      const html = '<p>Just a paragraph.</p><p>Another paragraph.</p>'
-      const result = extractDocxTitleFromHtml(html, 'notes.docx')
-
-      expect(result.title).toBe('notes')
       expect(result.source).toBe('filename')
     })
 

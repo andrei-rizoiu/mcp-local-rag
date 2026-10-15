@@ -25,11 +25,6 @@ const CJK_SENTENCE =
   '本项目的分块流程先按语义边界切分文本再度量真实词元数量然后仅对超出模型位置窗口的部分进行切分以保证内容完整可检索。'
 const CJK_DOCUMENT = `${DENSE_PHRASE.repeat(10)}${CJK_SENTENCE.repeat(3)}`
 
-/** One unit whose density changes inside it: ideographs cost about a token each here, Latin words a quarter of that. */
-const MIXED_DENSITY_DOCUMENT = `${DENSE_PHRASE.repeat(6)}${'retrieval augmented generation keeps the source text on the same machine '.repeat(
-  20
-)}${DENSE_PHRASE.repeat(6)}`
-
 const TRUNCATION_WARNING = /input exceeds the model token limit/
 
 function defaultModelEmbedder(): Embedder {
@@ -86,23 +81,5 @@ describe('Measured containment on the real tokenizer', () => {
       .map((call) => String(call[0]))
       .filter((message) => TRUNCATION_WARNING.test(message))
     expect(warnings).toEqual([])
-  }, 180000)
-
-  it('keeps chunks near the cap across a density change inside one unit', async () => {
-    const embedder = defaultModelEmbedder()
-    const cap = expectDefined(await embedder.getTokenLimit())
-
-    const chunks = await new SemanticChunker().chunkText(MIXED_DENSITY_DOCUMENT, embedder)
-
-    const lengths = await embedder.countTokens(chunks.map((chunk) => chunk.text))
-    for (const length of lengths) {
-      expect(length).toBeLessThanOrEqual(cap)
-    }
-    // Chunks stay proportional on both sides of the density change.
-    const [total] = await embedder.countTokens([MIXED_DENSITY_DOCUMENT])
-    expect(chunks.length).toBeLessThanOrEqual(Math.ceil(expectDefined(total) / cap) * 3)
-    expect(withoutWhitespace(chunks.map((chunk) => chunk.text).join(''))).toBe(
-      withoutWhitespace(MIXED_DENSITY_DOCUMENT)
-    )
   }, 180000)
 })

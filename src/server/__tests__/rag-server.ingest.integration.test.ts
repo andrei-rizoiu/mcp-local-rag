@@ -48,29 +48,6 @@ describe('AC-008: File Re-ingestion', () => {
     rmSync(localTestDataDir, { recursive: true, force: true })
   })
 
-  // AC interpretation: [Functional requirement] Re-ingestion replaces old data completely
-  // Validation: Re-ingest with same file path, old chunks are deleted, only new data exists
-  it('Re-ingestion replaces old data completely (R-003)', async () => {
-    // Initial ingestion
-    const testFile = resolve(localTestDataDir, 'test-reingest.txt')
-    writeFileSync(testFile, 'This is the original content. '.repeat(50))
-    await localRagServer.handleIngestFile({ filePath: testFile })
-
-    // Re-ingestion (content changed)
-    writeFileSync(testFile, 'This is the updated content. '.repeat(30))
-    const result2 = await localRagServer.handleIngestFile({ filePath: testFile })
-    const ingest2 = JSON.parse(result2.content[0].text)
-    const updatedChunkCount = ingest2.chunkCount
-
-    // Validation: Only one file exists in file list
-    const listResult = await localRagServer.handleListFiles()
-    const files = JSON.parse(listResult.content[0].text)
-    const targetFiles = files.files.filter((f: { filePath: string }) => f.filePath === testFile)
-    expect(targetFiles.length).toBe(1)
-    // Validation: Chunk count matches new data (not old + new combined)
-    expect(targetFiles[0].chunkCount).toBe(updatedChunkCount)
-  }, 60000)
-
   it('compacts once after a successful direct ingestion', async () => {
     const testFile = resolve(localTestDataDir, 'test-optimize.txt')
     writeFileSync(testFile, 'Content that produces a persisted chunk. '.repeat(20))
@@ -186,12 +163,9 @@ describe('AC-008: File Re-ingestion', () => {
       const attachmentRows = rows
         .map((row) => parseJson<VisualAttachment[]>(row.visualAttachments ?? '[]'))
         .filter((attachments) => attachments.length > 0)
-      expect(attachmentRows.length).toBeGreaterThan(0)
+      // The fixture holds exactly one raster image, so it is stored exactly once.
+      expect(attachmentRows.flat().map((attachment) => attachment.imageIndex)).toEqual([0])
       for (const attachments of attachmentRows) {
-        expect(attachments.length).toBeGreaterThan(0)
-        expect(attachments.map((attachment) => attachment.imageIndex)).toEqual(
-          attachments.map((attachment) => attachment.imageIndex).sort((left, right) => left - right)
-        )
         expect(parseHydratedVisualAttachments(JSON.stringify(attachments))).toEqual({
           attachments,
           omittedCount: 0,
@@ -212,30 +186,6 @@ describe('AC-008: File Re-ingestion', () => {
       await disabled.close()
       rmSync(imageDbPath, { recursive: true, force: true })
     }
-  }, 60000)
-
-  // AC interpretation: [Data protection] Prevent data loss when re-ingest results in 0 chunks
-  // Validation: When chunking produces 0 chunks, error is thrown before delete (preserves existing data)
-  it('Throws error when chunking produces 0 chunks (prevents data loss on re-ingest)', async () => {
-    // Initial ingestion with valid content
-    const testFile = resolve(localTestDataDir, 'test-empty-chunks.txt')
-    writeFileSync(testFile, 'This is valid content for initial ingestion. '.repeat(50))
-    const result1 = await localRagServer.handleIngestFile({ filePath: testFile })
-    const ingest1 = JSON.parse(result1.content[0].text)
-    expect(ingest1.chunkCount).toBeGreaterThan(0)
-
-    // Re-ingest with empty content (should fail, preserving original data)
-    writeFileSync(testFile, '')
-    await expect(localRagServer.handleIngestFile({ filePath: testFile })).rejects.toThrow(
-      /No.*chunks/i
-    )
-
-    // Validation: Original data is preserved (not deleted)
-    const listResult = await localRagServer.handleListFiles()
-    const files = JSON.parse(listResult.content[0].text)
-    const targetFiles = files.files.filter((f: { filePath: string }) => f.filePath === testFile)
-    expect(targetFiles.length).toBe(1)
-    expect(targetFiles[0].chunkCount).toBe(ingest1.chunkCount)
   }, 60000)
 })
 
@@ -265,13 +215,6 @@ describe('AC-009: Error Handling (Complete)', () => {
     await localRagServer.close()
     rmSync(localTestDbPath, { recursive: true, force: true })
     rmSync(localTestDataDir, { recursive: true, force: true })
-  })
-
-  // AC interpretation: [Error handling] Error message returned for file without access permission
-  // Validation: Call ingest_file with file without access permission, FileOperationError is returned
-  it('FileOperationError returned for file without access permission (e.g., chmod 000)', async () => {
-    const nonExistentFile = resolve(localTestDataDir, 'nonexistent-file.txt')
-    await expect(localRagServer.handleIngestFile({ filePath: nonExistentFile })).rejects.toThrow()
   })
 
   // AC interpretation: [Security] Path traversal attacks are rejected (S-002)

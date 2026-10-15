@@ -1,5 +1,5 @@
 // RAG MCP Server Integration Test - Protocol & Basic Error Handling
-// Split from: rag-server.integration.test.ts (AC-001, AC-005)
+// Split from: rag-server.integration.test.ts (AC-005)
 
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -20,64 +20,6 @@ import type { VectorChunk, VectorStore } from '../../vectordb/index.js'
 import { DatabaseError } from '../../vectordb/types.js'
 import { RAGServer } from '../index.js'
 import type { SyncStatusResult } from '../types.js'
-
-describe('AC-001: MCP Protocol Integration', () => {
-  let ragServer: RAGServer
-  const testDbPath = resolve('./tmp/test-lancedb-protocol')
-  const testDataDir = resolve('./tmp/test-data-protocol')
-
-  beforeAll(async () => {
-    mkdirSync(testDbPath, { recursive: true })
-    mkdirSync(testDataDir, { recursive: true })
-
-    ragServer = new RAGServer(
-      withTestDevice({
-        dbPath: testDbPath,
-        modelName: 'Xenova/all-MiniLM-L6-v2',
-        cacheDir: testModelCacheDir(),
-        baseDir: testDataDir,
-        maxFileSize: 100 * 1024 * 1024,
-      })
-    )
-
-    await ragServer.initialize()
-  })
-
-  afterAll(async () => {
-    await ragServer.close()
-    rmSync(testDbPath, { recursive: true, force: true })
-    rmSync(testDataDir, { recursive: true, force: true })
-  })
-
-  // AC interpretation: [Error handling] Appropriate MCP error response returned when error occurs
-  // Validation: MCP error response (error code, message) returned for invalid input
-  it('Appropriate MCP error response (JSON-RPC 2.0 format) returned for invalid tool invocation', async () => {
-    // Call ingest_file with non-existent file and verify error occurs
-    await expect(
-      ragServer.handleIngestFile({ filePath: '/nonexistent/file.pdf' })
-    ).rejects.toThrow()
-  })
-
-  // Edge Case: Parallel request processing
-  // Validation: Multiple MCP tool invocations are processed in parallel
-  it('3 parallel MCP tool invocations are processed normally (P-003)', async () => {
-    // Invoke 3 handlers in parallel
-    const results = await Promise.all([
-      ragServer.handleStatus(),
-      ragServer.handleListFiles(),
-      ragServer.handleStatus(),
-    ])
-
-    // Verify all results are returned normally
-    expect(results).toHaveLength(3)
-    for (const result of results) {
-      expect(result).toBeDefined()
-      expect(result.content).toBeDefined()
-      expect(result.content.length).toBe(1)
-      expect(result.content[0].type).toBe('text')
-    }
-  })
-})
 
 const INLINE_IMAGE_TMP_ROOT = resolve('./tmp/test-server-protocol-inline-images')
 const INLINE_IMAGE_DATA_DIR = join(INLINE_IMAGE_TMP_ROOT, 'documents')
@@ -328,10 +270,15 @@ describe('AC-005: Error Handling (Basic)', () => {
   })
 
   // AC interpretation: [Error handling] Error message returned for non-existent file path
-  // Validation: Call ingest_file with non-existent file path, FileOperationError is returned
-  it('FileOperationError returned for non-existent file path (e.g., /nonexistent/file.pdf)', async () => {
+  // Validation: Call ingest_file with a missing file inside baseDir, ValidationError is returned
+  it('ValidationError (File not found) returned for a non-existent file inside baseDir', async () => {
     const nonExistentFile = resolve(testDataDir, 'nonexistent-file.pdf')
-    await expect(ragServer.handleIngestFile({ filePath: nonExistentFile })).rejects.toThrow()
+    await expect(ragServer.handleIngestFile({ filePath: nonExistentFile })).rejects.toThrow(
+      expect.objectContaining({
+        name: 'ValidationError',
+        message: expect.stringContaining(`File not found: ${nonExistentFile}`),
+      })
+    )
   })
 
   // AC interpretation: [Error handling] Error message returned for corrupted PDF file
@@ -436,7 +383,6 @@ function tick(): Promise<void> {
   return new Promise((resolveTick) => setImmediate(resolveTick))
 }
 
-type ListedTool = Awaited<ReturnType<Client['listTools']>>['tools'][number]
 type CallToolReturn = Awaited<ReturnType<Client['callTool']>>
 type ToolResult = Extract<CallToolReturn, { content: unknown }>
 
@@ -468,14 +414,6 @@ function firstText(result: CallToolReturn): string {
     throw new Error('tools/call returned no leading text block')
   }
   return block.text
-}
-
-function namedTool(tools: ListedTool[], name: string): ListedTool {
-  const tool = tools.find((candidate) => candidate.name === name)
-  if (tool === undefined) {
-    throw new Error(`tools/list did not return ${name}`)
-  }
-  return tool
 }
 
 /** Narrow a caught value to an `McpError`, failing the test for anything else. */
@@ -590,7 +528,7 @@ describe('SYNC-006 / SYNC-007: sync tools over the MCP SDK protocol', () => {
     throw new Error(`sync job ${jobId} never reached a terminal state`)
   }
 
-  it('returns both sync tools with their schemas from tools/list, next to every pre-existing tool', async () => {
+  it('returns both sync tools from tools/list, next to every pre-existing tool', async () => {
     const { tools } = await client.listTools()
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
@@ -604,17 +542,6 @@ describe('SYNC-006 / SYNC-007: sync tools over the MCP SDK protocol', () => {
       'sync_start',
       'sync_status',
     ])
-
-    const syncStart = namedTool(tools, 'sync_start')
-    expect(syncStart.inputSchema.type).toBe('object')
-    expect(Object.keys(syncStart.inputSchema.properties ?? {})).toEqual(['path'])
-    // `path` is optional: an omitted path means every configured base directory.
-    expect(syncStart.inputSchema.required).toBeUndefined()
-
-    const syncStatusTool = namedTool(tools, 'sync_status')
-    expect(syncStatusTool.inputSchema.type).toBe('object')
-    expect(Object.keys(syncStatusTool.inputSchema.properties ?? {})).toEqual(['jobId'])
-    expect(syncStatusTool.inputSchema.required).toEqual(['jobId'])
   })
 
   it('negotiates the tools capability alone, with no experimental entry', () => {

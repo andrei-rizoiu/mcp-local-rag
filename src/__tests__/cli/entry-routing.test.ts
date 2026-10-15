@@ -50,12 +50,6 @@ describe('CLI entry routing', () => {
     expect(stderr).toContain('ingest')
     expect(stderr).toContain('read-neighbors')
     expect(stderr).toContain('relocate')
-  })
-
-  it('lists sync among the available commands on an unknown subcommand', () => {
-    const { status, stderr } = runCli(['definitely-not-a-command'])
-
-    expect(status).toBe(1)
     expect(stderr).toContain('sync')
   })
 

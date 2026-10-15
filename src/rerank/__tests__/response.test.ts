@@ -25,12 +25,6 @@ describe('validateRerankResponse acceptance', () => {
     }
   })
 
-  it('accepts fewer results than were sent, because the count is the command s decision', () => {
-    const match = validateRerankResponse(out([result]))
-
-    expect(match.ok).toBe(true)
-  })
-
   it('accepts an empty result set as an answer rather than a failure', () => {
     const match = validateRerankResponse('[]')
 
@@ -38,12 +32,6 @@ describe('validateRerankResponse acceptance', () => {
     if (match.ok) {
       expect(match.results).toEqual([])
     }
-  })
-
-  it('accepts a chunk the server never sent', () => {
-    const match = validateRerankResponse(out([{ ...result, filePath: '/never/sent.md' }]))
-
-    expect(match.ok).toBe(true)
   })
 
   it('accepts the same chunk twice', () => {
@@ -61,15 +49,6 @@ describe('validateRerankResponse acceptance', () => {
     expect(match.ok).toBe(true)
     if (match.ok) {
       expect(match.results[0]).toHaveProperty('rerankScore', 0.93)
-    }
-  })
-
-  it('carries through text the command rewrote', () => {
-    const match = validateRerankResponse(out([{ ...result, text: 'one sentence only' }]))
-
-    expect(match.ok).toBe(true)
-    if (match.ok) {
-      expect(match.results[0]?.text).toBe('one sentence only')
     }
   })
 

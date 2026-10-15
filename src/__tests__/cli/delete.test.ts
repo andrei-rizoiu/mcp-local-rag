@@ -360,15 +360,8 @@ describe('CLI delete', () => {
     expect(parsed.deleted).toBe(true)
     expect(parsed.removedChunks).toBe(0)
     expect(parsed.existed).toBe(false)
-  })
 
-  it('should attempt .meta.json cleanup even when the .md file is already missing', async () => {
-    mocks.deleteChunks.mockResolvedValue(0)
-    const enoentError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-    mocks.unlink.mockRejectedValue(enoentError)
-
-    await captureStderr(() => runDelete(['--source', 'https://example.com/missing']))
-
+    // .meta.json and snapshot cleanup are still attempted although the .md file is missing
     expect(mocks.unlink).toHaveBeenCalledTimes(3)
     const paths = mocks.unlink.mock.calls.map((c: unknown[]) => expectString(c[0]))
     expect(paths.some((p: string) => p.endsWith('.md'))).toBe(true)
@@ -381,19 +374,19 @@ describe('CLI delete', () => {
   // --------------------------------------------
   // Path validation for file path argument
   // --------------------------------------------
-  it('should reject sensitive system paths for file-path argument', async () => {
-    // Sensitive path prefixes (/etc, /usr, etc.) are Unix-specific.
-    // On Windows, resolve('/etc/passwd') produces a drive-letter path
-    // (e.g. D:\etc\passwd) which doesn't match the Unix prefix check.
-    if (process.platform === 'win32') {
-      return
-    }
-    const { output, error } = await captureStderr(() => runDelete(['/etc/passwd']))
+  // Sensitive path prefixes (/etc, /usr, etc.) are Unix-specific.
+  // On Windows, resolve('/etc/passwd') produces a drive-letter path
+  // (e.g. D:\etc\passwd) which doesn't match the Unix prefix check.
+  it.skipIf(process.platform === 'win32')(
+    'should reject sensitive system paths for file-path argument',
+    async () => {
+      const { output, error } = await captureStderr(() => runDelete(['/etc/passwd']))
 
-    expect(error).toBeUndefined()
-    expect(process.exitCode).toBe(1)
-    expect(output.join('\n')).toContain('Refusing to use sensitive system path')
-  })
+      expect(error).toBeUndefined()
+      expect(process.exitCode).toBe(1)
+      expect(output.join('\n')).toContain('Refusing to use sensitive system path')
+    }
+  )
 
   // --------------------------------------------
   // Unknown flags cause exit(1)

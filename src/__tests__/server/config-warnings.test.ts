@@ -23,13 +23,6 @@ describe('parseGroupingMode', () => {
     expect(parseGroupingMode('SIMILAR')).toEqual({ value: 'similar' })
     expect(parseGroupingMode(' Related ')).toEqual({ value: 'related' })
   })
-
-  it('returns warning for invalid values', () => {
-    const result = parseGroupingMode('invalid')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_GROUPING')
-    expect(result.warning).toContain('"invalid"')
-  })
 })
 
 describe('parseMaxDistance', () => {
@@ -43,30 +36,6 @@ describe('parseMaxDistance', () => {
     expect(parseMaxDistance('1.0')).toEqual({ value: 1.0 })
     expect(parseMaxDistance('0.001')).toEqual({ value: 0.001 })
   })
-
-  it('returns warning for zero', () => {
-    const result = parseMaxDistance('0')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_DISTANCE')
-  })
-
-  it('returns warning for negative values', () => {
-    const result = parseMaxDistance('-1')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_DISTANCE')
-  })
-
-  it('returns warning for non-numeric input', () => {
-    const result = parseMaxDistance('abc')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_DISTANCE')
-  })
-
-  it('returns warning for Infinity', () => {
-    const result = parseMaxDistance('Infinity')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_DISTANCE')
-  })
 })
 
 describe('parseMaxFiles', () => {
@@ -78,25 +47,6 @@ describe('parseMaxFiles', () => {
   it('returns valid positive integers', () => {
     expect(parseMaxFiles('1')).toEqual({ value: 1 })
     expect(parseMaxFiles('10')).toEqual({ value: 10 })
-  })
-
-  it('returns warning for zero', () => {
-    const result = parseMaxFiles('0')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_FILES')
-    expect(result.warning).toContain('"0"')
-  })
-
-  it('returns warning for negative values', () => {
-    const result = parseMaxFiles('-1')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_FILES')
-  })
-
-  it('returns warning for non-numeric input', () => {
-    const result = parseMaxFiles('abc')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_MAX_FILES')
   })
 })
 
@@ -111,24 +61,6 @@ describe('parseHybridWeight', () => {
     expect(parseHybridWeight('0.5')).toEqual({ value: 0.5 })
     expect(parseHybridWeight('1')).toEqual({ value: 1 })
     expect(parseHybridWeight('1.0')).toEqual({ value: 1.0 })
-  })
-
-  it('returns warning for values below 0', () => {
-    const result = parseHybridWeight('-0.1')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_HYBRID_WEIGHT')
-  })
-
-  it('returns warning for values above 1', () => {
-    const result = parseHybridWeight('1.1')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_HYBRID_WEIGHT')
-  })
-
-  it('returns warning for non-numeric input', () => {
-    const result = parseHybridWeight('abc')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid RAG_HYBRID_WEIGHT')
   })
 })
 
@@ -147,39 +79,35 @@ describe('parseChunkMinLength', () => {
     expect(parseChunkMinLength('1')).toEqual({ value: 1 })
     expect(parseChunkMinLength('10000')).toEqual({ value: 10000 })
   })
+})
 
-  it('returns warning for value below minimum', () => {
-    const result = parseChunkMinLength('0')
+describe('invalid search and chunk settings', () => {
+  it.each([
+    { name: 'RAG_GROUPING', parse: parseGroupingMode, raw: 'invalid' },
+    { name: 'RAG_MAX_DISTANCE', parse: parseMaxDistance, raw: '0' },
+    { name: 'RAG_MAX_DISTANCE', parse: parseMaxDistance, raw: '-1' },
+    { name: 'RAG_MAX_DISTANCE', parse: parseMaxDistance, raw: 'abc' },
+    { name: 'RAG_MAX_DISTANCE', parse: parseMaxDistance, raw: 'Infinity' },
+    { name: 'RAG_MAX_FILES', parse: parseMaxFiles, raw: '0' },
+    { name: 'RAG_MAX_FILES', parse: parseMaxFiles, raw: '-1' },
+    { name: 'RAG_MAX_FILES', parse: parseMaxFiles, raw: 'abc' },
+    { name: 'RAG_HYBRID_WEIGHT', parse: parseHybridWeight, raw: '-0.1' },
+    { name: 'RAG_HYBRID_WEIGHT', parse: parseHybridWeight, raw: '1.1' },
+    { name: 'RAG_HYBRID_WEIGHT', parse: parseHybridWeight, raw: 'abc' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '0' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '-1' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '10001' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: 'abc' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '50.5' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '50abc' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '1e2' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: '0x10' },
+    { name: 'CHUNK_MIN_LENGTH', parse: parseChunkMinLength, raw: ' 50' },
+  ])('$name ignores $raw with a warning', ({ name, parse, raw }) => {
+    const result = parse(raw)
     expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid CHUNK_MIN_LENGTH')
+    expect(result.warning).toContain(`Invalid ${name} value: "${raw}"`)
   })
-
-  it('returns warning for negative value', () => {
-    const result = parseChunkMinLength('-1')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid CHUNK_MIN_LENGTH')
-  })
-
-  it('returns warning for value above maximum', () => {
-    const result = parseChunkMinLength('10001')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid CHUNK_MIN_LENGTH')
-  })
-
-  it('returns warning for non-numeric input', () => {
-    const result = parseChunkMinLength('abc')
-    expect(result.value).toBeUndefined()
-    expect(result.warning).toContain('Invalid CHUNK_MIN_LENGTH')
-  })
-
-  it.each(['50.5', '50abc', '1e2', '0x10', ' 50'])(
-    'returns warning for non-integer %s',
-    (value) => {
-      const result = parseChunkMinLength(value)
-      expect(result.value).toBeUndefined()
-      expect(result.warning).toContain('Invalid CHUNK_MIN_LENGTH')
-    }
-  )
 })
 
 describe('MAX_FILE_SIZE configuration', () => {

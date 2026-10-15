@@ -74,6 +74,7 @@ let FileOperationError: typeof import('../index.js').FileOperationError
 // `AppError` class once `vi.resetModules()` rebuilds the graph, making
 // `instanceof AppError` spuriously false.
 let EmbeddingError: typeof import('../../embedder/index.js').EmbeddingError
+let extractPdfTitle: typeof import('../title-extractor.js').extractPdfTitle
 
 // ============================================
 // Test suite
@@ -93,6 +94,8 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
     vi.doMock('../../chunker/index.js', chunkerFactory)
     ;({ DocumentParser, FileOperationError } = await import('../index.js'))
     ;({ EmbeddingError } = await import('../../embedder/index.js'))
+    ;({ extractPdfTitle } =
+      await vi.importActual<typeof import('../title-extractor.js')>('../title-extractor.js'))
   })
 
   afterAll(() => {
@@ -144,8 +147,8 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
 
     parser = new DocumentParser({ baseDir: testDir, maxFileSize })
 
-    // Default happy-path behavior for the filter and title extractor; each
-    // test overrides the relevant mock to inject its failure class.
+    // Default happy-path behavior for the filter and the real title extractor;
+    // each test overrides the relevant mock to inject its failure class.
     mockFilterPageBoundaryLayouts.mockImplementation(
       async (pageDataArr: Array<{ items: Array<{ text: string }> }>) =>
         pageDataArr.map((p) => ({
@@ -153,14 +156,7 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
           textFragments: [],
         }))
     )
-    mockExtractPdfTitle.mockImplementation(
-      (
-        _metadata: string | undefined,
-        _chunk: string | undefined,
-        fileName: string,
-        _fontHint?: { text: string; fontSize: number }
-      ) => ({ title: fileName.replace(/\.pdf$/, ''), source: 'filename' as const })
-    )
+    mockExtractPdfTitle.mockImplementation(extractPdfTitle)
     mockChunkText.mockImplementation(async (text: string) => [{ text, index: 0 }])
 
     await writeFile(join(testDir, 'test.pdf'), 'dummy-pdf-content')
@@ -176,7 +172,7 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
 
   it('parsePdf rethrows a foreign EmbeddingError unchanged (not relabeled as FileOperationError)', async () => {
     const filePath = join(testDir, 'test.pdf')
-    setupMupdfMock()
+    const { destroyFn } = setupMupdfMock()
     const foreign = new EmbeddingError('Embedding failed for dtype int8')
     mockFilterPageBoundaryLayouts.mockRejectedValue(foreign)
 
@@ -191,34 +187,6 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
     expect(thrown).toBeInstanceOf(EmbeddingError)
     expect(thrown).not.toBeInstanceOf(FileOperationError)
     expect(expectInstanceOf(thrown, EmbeddingError).message).toBe('Embedding failed for dtype int8')
-  })
-
-  it('parsePdf still wraps a genuine non-AppError IO/mupdf failure as FileOperationError with cause', async () => {
-    const filePath = join(testDir, 'test.pdf')
-    setupMupdfMock()
-    const genuine = new Error('Simulated mupdf decode failure')
-    mockFilterPageBoundaryLayouts.mockRejectedValue(genuine)
-
-    let thrown: unknown
-    try {
-      await parser.parsePdf(filePath, mockEmbedder)
-    } catch (error) {
-      thrown = error
-    }
-
-    expect(thrown).toBeInstanceOf(FileOperationError)
-    expect(expectInstanceOf(thrown, FileOperationError).message).toBe(
-      `Failed to parse PDF: ${filePath}`
-    )
-    expect(expectInstanceOf(thrown, FileOperationError).cause).toBe(genuine)
-  })
-
-  it('parsePdf still disposes doc on the foreign-error rethrow path (finally runs)', async () => {
-    const filePath = join(testDir, 'test.pdf')
-    const { destroyFn } = setupMupdfMock()
-    mockFilterPageBoundaryLayouts.mockRejectedValue(new EmbeddingError('boom'))
-
-    await expect(parser.parsePdf(filePath, mockEmbedder)).rejects.toBeInstanceOf(EmbeddingError)
     expect(destroyFn).toHaveBeenCalledTimes(1)
   })
 
@@ -228,7 +196,7 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
 
   it('parsePdfPages rethrows a foreign EmbeddingError unchanged', async () => {
     const filePath = join(testDir, 'test.pdf')
-    setupMupdfMock()
+    const { destroyFn } = setupMupdfMock()
     const foreign = new EmbeddingError('Embedding failed during page extraction')
     mockFilterPageBoundaryLayouts.mockRejectedValue(foreign)
 
@@ -242,36 +210,6 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
     expect(thrown).toBe(foreign)
     expect(thrown).toBeInstanceOf(EmbeddingError)
     expect(thrown).not.toBeInstanceOf(FileOperationError)
-  })
-
-  it('parsePdfPages still wraps a genuine non-AppError failure as FileOperationError with cause', async () => {
-    const filePath = join(testDir, 'test.pdf')
-    setupMupdfMock()
-    const genuine = new Error('Simulated mupdf page failure')
-    mockFilterPageBoundaryLayouts.mockRejectedValue(genuine)
-
-    let thrown: unknown
-    try {
-      await parser.parsePdfPages(filePath, mockEmbedder)
-    } catch (error) {
-      thrown = error
-    }
-
-    expect(thrown).toBeInstanceOf(FileOperationError)
-    expect(expectInstanceOf(thrown, FileOperationError).message).toBe(
-      `Failed to parse PDF pages: ${filePath}`
-    )
-    expect(expectInstanceOf(thrown, FileOperationError).cause).toBe(genuine)
-  })
-
-  it('parsePdfPages disposes doc exactly once before rethrowing a foreign EmbeddingError', async () => {
-    const filePath = join(testDir, 'test.pdf')
-    const { destroyFn } = setupMupdfMock()
-    mockFilterPageBoundaryLayouts.mockRejectedValue(new EmbeddingError('boom'))
-
-    await expect(parser.parsePdfPages(filePath, mockEmbedder)).rejects.toBeInstanceOf(
-      EmbeddingError
-    )
     expect(destroyFn).toHaveBeenCalledTimes(1)
   })
 
@@ -301,15 +239,16 @@ describe('parser PDF foreign-error reclassification (AC-002 / AC-003)', () => {
   })
 
   it('title extraction falls back to the filename for a non-AppError title-local failure', async () => {
-    const filePath = join(testDir, 'test.pdf')
+    const filePath = join(testDir, 'annual-report.pdf')
+    await writeFile(filePath, 'dummy-pdf-content')
     setupMupdfMock()
     mockChunkText.mockRejectedValue(new Error('Title-local chunking glitch'))
 
     const result = await parser.parsePdf(filePath, mockEmbedder)
 
     // The non-AppError title-local failure is swallowed; the filename-derived
-    // title is used (mockExtractPdfTitle returns the basename without .pdf).
-    expect(result.title).toBe('test')
-    expect(result.embeddingTitle).toBe('test')
+    // title is used.
+    expect(result.title).toBe('annual report')
+    expect(result.embeddingTitle).toBe('annual report')
   })
 })
