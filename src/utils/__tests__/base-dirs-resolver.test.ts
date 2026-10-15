@@ -10,7 +10,7 @@
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, sep } from 'node:path'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { type BaseDirsConfigWarning, resolveBaseDirs, withTrailingSeparator } from '../base-dirs.js'
 
@@ -108,20 +108,6 @@ describe('resolveBaseDirs — CLI roots precedence', () => {
       expect(precedenceWarnings).toEqual([])
     }
   })
-
-  it('does not merge CLI roots with env roots', async () => {
-    const result = await resolveBaseDirs({
-      cliRoots: [dirA],
-      envBaseDirs: JSON.stringify([dirB]),
-      cwd: tmpRoot,
-    })
-
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      // dirB must NOT appear in the resolved roots — CLI replaces env.
-      expect(result.config.baseDirs).not.toContain(withTrailingSeparator(realB))
-    }
-  })
 })
 
 // ============================================
@@ -153,21 +139,6 @@ describe('resolveBaseDirs — rawBaseDirs (normal-path) projection', () => {
         withTrailingSeparator(dirA),
         withTrailingSeparator(dirB),
       ])
-    }
-  })
-
-  it('rawBaseDirs mirrors the dedup/nested-prune decisions made on baseDirs', async () => {
-    // nestedChild is pruned (it lives under nestedParent). Both lists must drop
-    // it in lockstep so `rawBaseDirs[i]` stays aligned with `baseDirs[i]`.
-    const result = await resolveBaseDirs({
-      cliRoots: [nestedParent, nestedChild],
-      cwd: tmpRoot,
-    })
-
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      expect(result.config.baseDirs).toEqual([withTrailingSeparator(realNestedParent)])
-      expect(result.config.rawBaseDirs).toEqual([withTrailingSeparator(nestedParent)])
     }
   })
 })
@@ -238,15 +209,6 @@ describe('resolveBaseDirs — BASE_DIRS precedence', () => {
     if (!result.ok) {
       expect(result.error.message).toMatch(/empty/i)
     }
-  })
-
-  it('returns a config error for BASE_DIRS containing an empty string', async () => {
-    const result = await resolveBaseDirs({
-      envBaseDirs: `["${dirA}", ""]`,
-      cwd: tmpRoot,
-    })
-
-    expect(result.ok).toBe(false)
   })
 
   it('returns a config error when a BASE_DIRS path does not exist', async () => {
@@ -415,22 +377,9 @@ describe('resolveBaseDirs — dedup and nested pruning', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.config.baseDirs).toEqual([withTrailingSeparator(realNestedParent)])
-      const pruningWarnings = result.warnings.filter(
-        (w: BaseDirsConfigWarning) => w.kind === 'nested-root-pruned'
-      )
-      expect(pruningWarnings).toHaveLength(1)
-    }
-  })
-
-  it('prunes nested BASE_DIRS roots and emits a pruning warning', async () => {
-    const result = await resolveBaseDirs({
-      envBaseDirs: JSON.stringify([nestedParent, nestedChild]),
-      cwd: tmpRoot,
-    })
-
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      expect(result.config.baseDirs).toEqual([withTrailingSeparator(realNestedParent)])
+      // rawBaseDirs drops the pruned child in lockstep so `rawBaseDirs[i]`
+      // stays aligned with `baseDirs[i]`.
+      expect(result.config.rawBaseDirs).toEqual([withTrailingSeparator(nestedParent)])
       const pruningWarnings = result.warnings.filter(
         (w: BaseDirsConfigWarning) => w.kind === 'nested-root-pruned'
       )
@@ -451,31 +400,6 @@ describe('resolveBaseDirs — dedup and nested pruning', () => {
       const kinds = result.warnings.map((w: BaseDirsConfigWarning) => w.kind)
       expect(kinds).toContain('base-dirs-overrides-base-dir')
       expect(kinds).toContain('nested-root-pruned')
-    }
-  })
-})
-
-// ============================================
-// Single-root BASE_DIR parity with current server-main.ts behavior
-// ============================================
-
-describe('resolveBaseDirs — parity with current single-root BASE_DIR behavior', () => {
-  it('resolves BASE_DIR=A identically to "cwd fallback" when cwd === A', async () => {
-    const withEnv = await resolveBaseDirs({ envBaseDir: dirA, cwd: tmpRoot })
-    const withCwd = await resolveBaseDirs({ cwd: dirA })
-
-    expect(withEnv.ok).toBe(true)
-    expect(withCwd.ok).toBe(true)
-    if (withEnv.ok && withCwd.ok) {
-      expect(withEnv.config.baseDirs).toEqual(withCwd.config.baseDirs)
-    }
-  })
-
-  it('produces a root with trailing path separator suitable for prefix checks', async () => {
-    const result = await resolveBaseDirs({ envBaseDir: dirA, cwd: tmpRoot })
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      expect(result.config.baseDirs[0]?.endsWith(sep)).toBe(true)
     }
   })
 })

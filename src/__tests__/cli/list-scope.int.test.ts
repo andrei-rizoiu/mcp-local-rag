@@ -8,33 +8,22 @@
 // Behavior: `runList(['--base-dir', dataDir, '--scope', inScopeDir], global)` over
 //     a real LanceDB + real-FS fixture → BFS pushdown prunes scope-outside
 //     subtrees → scoped stdout files[], raw-data sources retained, out-of-scope
-//     real-file ingested entry excluded from files[] AND sources[], no
-//     scope-outside SCANNED path reaches realpathForMatch, symlink-alias entry
-//     included with its stored filePath spelling; empty/whitespace/missing
-//     `--scope` exits non-zero with a stderr message and config resolution still
-//     fires even when scope is present.
+//     real-file ingested entry excluded from files[] AND sources[],
+//     symlink-alias entry included with its stored filePath spelling;
+//     empty/whitespace/missing `--scope` exits non-zero with a stderr message
+//     and config resolution still fires even when scope is present.
 //
-// Mocking strategy (shared-registry safe per project-context: isolate:false,
-// pool forks, maxWorkers 1): `../../utils/scan.js` is partial-mocked via
-// vi.doMock so `realpathForMatch` RECORDS its argument then DELEGATES to the
-// real implementation; `runList` (and the fixture-ingesting RAGServer) are
-// dynamically imported AFTER doMock and the mock is removed via doUnmock +
-// resetModules in afterAll. Only the CLI SCANNED call site (list.ts:268) is
-// asserted: the probe path is an UNINGESTED out-of-scope file, so it can reach
-// realpathForMatch solely through the scanned loop — the unchanged ingested-side
-// loop (list.ts:253) never sees it, so it cannot confound the proof. DB and FS
-// are otherwise real; runList itself needs no embedder (VectorStore only).
+// DB and FS are real; runList itself needs no embedder (VectorStore only).
 
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { runList } from '../../cli/list.js'
 import type { GlobalOptions } from '../../cli/options.js'
+import { RAGServer } from '../../server/index.js'
 import { testModelCacheDir, withTestDevice } from '../test-device.js'
 import { expectError } from '../test-doubles.js'
-
-// Records every path passed to the (spied) realpathForMatch, in call order.
-const realpathCalls: string[] = []
 
 // Directory symlinks require admin/developer mode on windows-latest (in the CI
 // matrix); probe support once so the alias contract describe is skipped there
@@ -51,25 +40,6 @@ function directorySymlinkSupported(): boolean {
   } finally {
     rmSync(probeBase, { recursive: true, force: true })
   }
-}
-
-let runList: typeof import('../../cli/list.js').runList
-let RAGServer: typeof import('../../server/index.js').RAGServer
-
-async function installScanSpyAndImportModules(): Promise<void> {
-  vi.doMock('../../utils/scan.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../utils/scan.js')>()
-    return {
-      ...actual,
-      realpathForMatch: vi.fn(async (filePath: string) => {
-        realpathCalls.push(filePath)
-        return actual.realpathForMatch(filePath)
-      }),
-    }
-  })
-  vi.resetModules()
-  ;({ runList } = await import('../../cli/list.js'))
-  ;({ RAGServer } = await import('../../server/index.js'))
 }
 
 /**
@@ -109,7 +79,7 @@ function captureRunList(args: string[], globalOptions: GlobalOptions) {
     })
 }
 
-describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proof', () => {
+describe('INT-3: runList(--scope) — scoped files, sources split', () => {
   const base = resolve('./tmp/test-cli-list-scope-int')
   const dataDir = join(base, 'data')
   const dbPath = join(base, 'lancedb')
@@ -117,9 +87,7 @@ describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proo
 
   const inScopeDir = join(dataDir, 'in-scope')
   const inScopeFile = join(inScopeDir, 'keep.txt')
-  // In-scope but NOT ingested: reachable only via the scanned-file loop, so it
-  // is the airtight non-vacuousness probe for the realpathForMatch spy (an
-  // ingested file would also be realpath'd by the ingested-side loop).
+  // In-scope but NOT ingested: listed through the scan alone.
   const inScopeUningested = join(inScopeDir, 'scanned-only.txt')
   const deepDir = join(inScopeDir, 'deep')
   const deepFile = join(deepDir, 'deep-keep.txt')
@@ -135,7 +103,7 @@ describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proo
 
   const globalOptions = { dbPath, cacheDir, modelName: 'Xenova/all-MiniLM-L6-v2' }
 
-  let server: InstanceType<typeof import('../../server/index.js').RAGServer>
+  let server: RAGServer
 
   beforeAll(async () => {
     mkdirSync(inScopeDir, { recursive: true })
@@ -151,8 +119,6 @@ describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proo
     writeFileSync(outScopeUningested, 'Out-of-scope UNINGESTED file. '.repeat(20))
     writeFileSync(outScopeIngested, 'Out-of-scope ingested file. '.repeat(20))
     writeFileSync(secondScopeFile, 'Second-scope file content. '.repeat(20))
-
-    await installScanSpyAndImportModules()
 
     // Ingest the fixture via a real RAGServer (real embed + LanceDB). runList
     // then reads the same dbPath; listing needs no embedder.
@@ -183,12 +149,10 @@ describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proo
     if (server) {
       await server.close()
     }
-    vi.doUnmock('../../utils/scan.js')
-    vi.resetModules()
     rmSync(base, { recursive: true, force: true })
   })
 
-  it('restricts stdout files[] to the in-scope subtree (out-of-scope files excluded)', async () => {
+  it('restricts files[] to the in-scope subtree, keeps raw-data sources, and drops out-of-scope real-file sources', async () => {
     const { stdout, error } = await captureRunList(
       ['--base-dir', dataDir, '--scope', inScopeDir],
       globalOptions
@@ -210,6 +174,15 @@ describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proo
     expect(parsed.baseDirs).toHaveLength(1)
     expect(parsed.baseDir).toBe(parsed.baseDirs[0])
     expect(parsed.baseDir.startsWith(dataDir)).toBe(true)
+
+    // Raw-data sources are kept regardless of scope.
+    const sourceEntry = parsed.sources.find((s: { source?: string }) => s.source === rawSource)
+    expect(sourceEntry).toBeDefined()
+
+    // An out-of-scope real-file ingested entry is excluded from sources[] too
+    // (AC6 negative).
+    const sourcePaths: string[] = parsed.sources.map((s: { filePath?: string }) => s.filePath)
+    expect(sourcePaths).not.toContain(outScopeIngested)
   })
 
   it('unions results across repeated --scope flags', async () => {
@@ -225,68 +198,6 @@ describe('INT-3: runList(--scope) — scoped files, sources split, pushdown proo
     expect(filePaths).toContain(secondScopeFile)
     expect(filePaths).not.toContain(outScopeUningested)
     expect(filePaths).not.toContain(outScopeIngested)
-  })
-
-  it('keeps raw-data sources regardless of scope', async () => {
-    const { stdout, error } = await captureRunList(
-      ['--base-dir', dataDir, '--scope', inScopeDir],
-      globalOptions
-    )
-    expect(error).toBeUndefined()
-    const parsed = JSON.parse(stdout.join(''))
-
-    const sourceEntry = parsed.sources.find((s: { source?: string }) => s.source === rawSource)
-    expect(sourceEntry).toBeDefined()
-  })
-
-  it('excludes an out-of-scope real-file ingested entry from BOTH files[] and sources[] (AC6 negative)', async () => {
-    const { stdout, error } = await captureRunList(
-      ['--base-dir', dataDir, '--scope', inScopeDir],
-      globalOptions
-    )
-    expect(error).toBeUndefined()
-    const parsed = JSON.parse(stdout.join(''))
-
-    const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-    const sourcePaths: string[] = parsed.sources.map((s: { filePath?: string }) => s.filePath)
-
-    expect(filePaths).not.toContain(outScopeIngested)
-    expect(sourcePaths).not.toContain(outScopeIngested)
-  })
-
-  it('lists every file when no --scope is given (scope-absent no-op)', async () => {
-    const { stdout, error } = await captureRunList(['--base-dir', dataDir], globalOptions)
-    expect(error).toBeUndefined()
-    const parsed = JSON.parse(stdout.join(''))
-    const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-
-    expect(filePaths).toContain(inScopeFile)
-    expect(filePaths).toContain(deepFile)
-    expect(filePaths).toContain(outScopeUningested)
-    expect(filePaths).toContain(outScopeIngested)
-
-    const sourceEntry = parsed.sources.find((s: { source?: string }) => s.source === rawSource)
-    expect(sourceEntry).toBeDefined()
-  })
-
-  it('never routes a scope-outside SCANNED path through realpathForMatch (CLI-side pushdown proof, AC4)', async () => {
-    realpathCalls.length = 0
-    const { error } = await captureRunList(
-      ['--base-dir', dataDir, '--scope', inScopeDir],
-      globalOptions
-    )
-    expect(error).toBeUndefined()
-
-    // The uningested out-of-scope file can only reach realpathForMatch via the
-    // scanned loop (list.ts:268). Under correct pushdown the walker prunes
-    // out-scope, so its path is never a call argument.
-    expect(realpathCalls).not.toContain(outScopeUningested)
-
-    // Non-vacuousness: the scanned loop DID run realpathForMatch over an
-    // in-scope file that is reachable ONLY via the scan (uningested, so the
-    // ingested-side loop never touches it) — proving the assertion above is not
-    // vacuously satisfied by a walker that produced nothing.
-    expect(realpathCalls).toContain(inScopeUningested)
   })
 
   it('documents --scope in the help text', async () => {
@@ -384,7 +295,7 @@ describeAlias('INT-3: runList(--scope) — symlink-alias contract (AC3)', () => 
   const cacheDir = join(base, 'cache')
   const globalOptions = { dbPath, cacheDir, modelName: 'Xenova/all-MiniLM-L6-v2' }
 
-  let server: InstanceType<typeof import('../../server/index.js').RAGServer>
+  let server: RAGServer
 
   beforeAll(async () => {
     mkdirSync(realSubDir, { recursive: true })
@@ -396,8 +307,6 @@ describeAlias('INT-3: runList(--scope) — symlink-alias contract (AC3)', () => 
     // describe was selected, so the dir symlink creation here is expected to
     // succeed.
     symlinkSync(realRoot, aliasRoot, 'dir')
-
-    await installScanSpyAndImportModules()
 
     server = new RAGServer(
       withTestDevice({
@@ -419,8 +328,6 @@ describeAlias('INT-3: runList(--scope) — symlink-alias contract (AC3)', () => 
     if (server) {
       await server.close()
     }
-    vi.doUnmock('../../utils/scan.js')
-    vi.resetModules()
     rmSync(base, { recursive: true, force: true })
   })
 

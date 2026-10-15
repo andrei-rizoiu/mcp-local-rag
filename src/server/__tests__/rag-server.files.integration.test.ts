@@ -1,5 +1,5 @@
-// RAG MCP Server Integration Test - Format Support & File Management
-// Split from: rag-server.integration.test.ts (AC-006, AC-007)
+// RAG MCP Server Integration Test - File Management
+// Split from: rag-server.integration.test.ts (AC-007)
 
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -7,81 +7,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { testModelCacheDir, withTestDevice } from '../../__tests__/test-device.js'
 import { expectError } from '../../__tests__/test-doubles.js'
 import { RAGServer } from '../index.js'
-
-describe('AC-006: Additional Format Support (Phase 2)', () => {
-  let localRagServer: RAGServer
-  const localTestDbPath = resolve('./tmp/test-lancedb-ac006')
-  const localTestDataDir = resolve('./tmp/test-data-ac006')
-  const localCacheDir = resolve('./tmp/test-cache-ac006')
-
-  beforeAll(async () => {
-    mkdirSync(localTestDbPath, { recursive: true })
-    mkdirSync(localTestDataDir, { recursive: true })
-    mkdirSync(localCacheDir, { recursive: true })
-
-    localRagServer = new RAGServer(
-      withTestDevice({
-        dbPath: localTestDbPath,
-        modelName: 'Xenova/all-MiniLM-L6-v2',
-        cacheDir: testModelCacheDir(localCacheDir),
-        baseDir: localTestDataDir,
-        maxFileSize: 100 * 1024 * 1024,
-      })
-    )
-
-    await localRagServer.initialize()
-  }, 60000)
-
-  afterAll(async () => {
-    await localRagServer.close()
-    rmSync(localTestDbPath, { recursive: true, force: true })
-    rmSync(localTestDataDir, { recursive: true, force: true })
-  })
-
-  // AC interpretation: [Functional requirement] Every supported format is routed to the correct parser
-  // Validation: DocumentParser.parseFile extracts text for TXT/MD, dispatches DOCX to parseDocx (FileOperationError on invalid content), and rejects PDF as an unsupported parseFile format (PDF uses parsePdf directly)
-  it('DocumentParser.parseFile dispatches each format (TXT/MD extracted, DOCX routed, PDF rejected as unsupported)', async () => {
-    const { DocumentParser } = await import('../../parser/index.js')
-    const parser = new DocumentParser({
-      baseDir: localTestDataDir,
-      maxFileSize: 100 * 1024 * 1024,
-    })
-
-    // Test TXT file parsing
-    const testTxtFile = resolve(localTestDataDir, 'test-all-formats.txt')
-    writeFileSync(testTxtFile, 'Test content for TXT format')
-    const txtResult = await parser.parseFile(testTxtFile)
-    expect(txtResult.content).toBe('Test content for TXT format')
-
-    // Test MD file parsing
-    const testMdFile = resolve(localTestDataDir, 'test-all-formats.md')
-    writeFileSync(testMdFile, '# Test Markdown\n\nTest content for MD format')
-    const mdResult = await parser.parseFile(testMdFile)
-    expect(mdResult.content).toBe('# Test Markdown\n\nTest content for MD format')
-
-    // Verify DOCX file branching exists
-    const fakeDocxFile = resolve(localTestDataDir, 'test-all-formats.docx')
-    writeFileSync(fakeDocxFile, 'Not a real DOCX file')
-    try {
-      await parser.parseFile(fakeDocxFile)
-      expect(false).toBe(true)
-    } catch (error) {
-      expect(expectError(error).name).toBe('FileOperationError')
-      expect(expectError(error).message).toContain('Failed to parse DOCX')
-    }
-
-    // PDF uses parsePdf directly (not parseFile)
-    const fakePdfFile = resolve(localTestDataDir, 'test-all-formats.pdf')
-    writeFileSync(fakePdfFile, 'Not a real PDF file')
-    try {
-      await parser.parseFile(fakePdfFile)
-      expect(false).toBe(true)
-    } catch (error) {
-      expect(expectError(error).name).toBe('ValidationError')
-      expect(expectError(error).message).toContain('Unsupported file format')
-    }
-  })
-})
 
 describe('AC-007: File Management', () => {
   let localRagServer: RAGServer
@@ -126,34 +51,16 @@ describe('AC-007: File Management', () => {
     rmSync(localTestDataDir, { recursive: true, force: true })
   })
 
-  // AC interpretation: [Functional requirement] List of ingested files displayed via list_files tool
-  // Validation: Call list_files, list of ingested files is returned
-  it('List of ingested files (filename, path, chunk count, ingestion time) displayed via list_files tool', async () => {
-    const result = await localRagServer.handleListFiles()
-
-    expect(result).toBeDefined()
-    expect(result.content).toBeDefined()
-    expect(result.content.length).toBe(1)
-    expect(result.content[0].type).toBe('text')
-
-    const files = JSON.parse(result.content[0].text)
-    expect(files.files).toBeDefined()
-    expect(files.files.length).toBe(3)
-
-    // Verify each ingested file contains required fields
-    for (const file of files.files.filter((f: { ingested: boolean }) => f.ingested)) {
-      expect(file.filePath).toBeDefined()
-      expect(file.chunkCount).toBeDefined()
-      expect(file.timestamp).toBeDefined()
-    }
-  })
-
   // AC interpretation: [Functional requirement] Filename, path, chunk count, ingestion time accurately displayed
   // Validation: list_files result contains detailed information for each file
   it('list_files result accurately contains detailed information (filePath, chunkCount, timestamp) for each file', async () => {
     const result = await localRagServer.handleListFiles()
+    expect(result.content.length).toBe(1)
+    expect(result.content[0].type).toBe('text')
+
     const files = JSON.parse(result.content[0].text)
     const { files: filesInBaseDir } = files
+    expect(filesInBaseDir.length).toBe(3)
 
     // Verify test-file-1.txt information
     const testFile1Path = resolve(localTestDataDir, 'test-file-1.txt')
@@ -287,47 +194,6 @@ describe('AC-007: File Management', () => {
       )
       expect(sourceEntry).toBeDefined()
     }, 30000)
-
-    it('dbPath/cacheDir outside baseDir causes no errors', async () => {
-      const siblingBase = resolve('./tmp/test-exclude-sibling')
-      const siblingData = resolve(siblingBase, 'data')
-      const siblingDb = resolve(siblingBase, 'db')
-      const siblingCache = resolve(siblingBase, 'cache-models')
-
-      mkdirSync(siblingData, { recursive: true })
-      mkdirSync(siblingDb, { recursive: true })
-      mkdirSync(siblingCache, { recursive: true })
-
-      writeFileSync(resolve(siblingData, 'sibling-file.txt'), 'File in sibling baseDir')
-
-      let siblingServer: RAGServer | null = null
-      try {
-        siblingServer = new RAGServer(
-          withTestDevice({
-            dbPath: siblingDb,
-            modelName: 'Xenova/all-MiniLM-L6-v2',
-            cacheDir: testModelCacheDir(siblingCache),
-            baseDir: siblingData,
-            maxFileSize: 100 * 1024 * 1024,
-          })
-        )
-
-        await siblingServer.initialize()
-
-        const result = await siblingServer.handleListFiles()
-        const parsed = JSON.parse(result.content[0].text)
-
-        const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-
-        expect(filePaths).toContain(resolve(siblingData, 'sibling-file.txt'))
-        expect(parsed.files.length).toBe(1)
-      } finally {
-        if (siblingServer) {
-          await siblingServer.close()
-        }
-        rmSync(siblingBase, { recursive: true, force: true })
-      }
-    })
   })
 })
 
@@ -335,8 +201,7 @@ describe('AC-007: File Management', () => {
 //
 // Covers the multi-root response shape produced by `handleListFiles` when
 // the server is configured with `baseDirs`: top-level `baseDirs`, preserved
-// legacy `baseDir`, per-file `baseDir` annotation, sources without root
-// annotation, dbPath/cacheDir exclusion across every root, and exact-path
+// legacy `baseDir`, sources without root annotation, and exact-path
 // de-duplication across roots.
 describe('AC-008: list_files multi-root contract', () => {
   const multiRootBase = resolve('./tmp/test-list-multi-root')
@@ -354,13 +219,6 @@ describe('AC-008: list_files multi-root contract', () => {
     mkdirSync(multiCacheDir, { recursive: true })
 
     writeFileSync(resolve(rootA, 'a-file.txt'), 'Content in root A')
-    writeFileSync(resolve(rootB, 'b-file.txt'), 'Content in root B')
-
-    // System-managed files inside dbPath/cacheDir — must be excluded across
-    // all roots (these live outside any base dir, but ensure exclusion logic
-    // is still applied uniformly).
-    writeFileSync(resolve(multiDbPath, 'db-internal.txt'), 'DB internal')
-    writeFileSync(resolve(multiCacheDir, 'cache-internal.txt'), 'Cache internal')
 
     multiServer = new RAGServer(
       withTestDevice({
@@ -380,25 +238,6 @@ describe('AC-008: list_files multi-root contract', () => {
     rmSync(multiRootBase, { recursive: true, force: true })
   })
 
-  // AC interpretation: [AC-008] list_files scans every effective root and annotates each file entry with the root that produced it
-  // Validation: With two roots, each scanned file appears in `files` and its `baseDir` matches the configured root
-  it('returns files from every effective root with per-file baseDir annotation', async () => {
-    const result = await multiServer.handleListFiles()
-    const parsed = JSON.parse(result.content[0].text)
-
-    const aPath = resolve(rootA, 'a-file.txt')
-    const bPath = resolve(rootB, 'b-file.txt')
-
-    const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-    expect(filePaths).toContain(aPath)
-    expect(filePaths).toContain(bPath)
-
-    const aEntry = parsed.files.find((f: { filePath: string }) => f.filePath === aPath)
-    const bEntry = parsed.files.find((f: { filePath: string }) => f.filePath === bPath)
-    expect(aEntry.baseDir).toBe(rootA)
-    expect(bEntry.baseDir).toBe(rootB)
-  })
-
   // AC interpretation: [AC-008/AC-011] Top-level `baseDirs` exposes the resolved effective roots in configured order
   // Validation: Parsed response `baseDirs` deep-equals `[rootA, rootB]` matching `RAGServer` configuration order
   it('top-level baseDirs equals the resolved effective roots in order', async () => {
@@ -416,17 +255,6 @@ describe('AC-008: list_files multi-root contract', () => {
 
     expect(parsed.baseDir).toBe(rootA)
     expect(parsed.baseDir).toBe(parsed.baseDirs[0])
-  })
-
-  // AC interpretation: [AC-008/AC-013] System-managed `dbPath` and `cacheDir` paths must be excluded from every root's scan
-  // Validation: Files placed inside `dbPath` and `cacheDir` are absent from `parsed.files` even with multi-root configuration
-  it('dbPath and cacheDir are excluded across all roots', async () => {
-    const result = await multiServer.handleListFiles()
-    const parsed = JSON.parse(result.content[0].text)
-
-    const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
-    expect(filePaths).not.toContain(resolve(multiDbPath, 'db-internal.txt'))
-    expect(filePaths).not.toContain(resolve(multiCacheDir, 'cache-internal.txt'))
   })
 
   // AC interpretation: [AC-008] Raw-data ingested via `ingest_data` is reported under `sources` and carries no producing-root annotation

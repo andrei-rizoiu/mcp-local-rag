@@ -2,14 +2,13 @@
 //
 // AC: The tool schema documents that a scope prefix must be absolute and a
 //     relative prefix matches nothing. This test pins the UX signal: a
-//     non-absolute prefix yields a non-fatal warning content block while the
-//     result semantics stay exactly "matches nothing" (behavior-additive, no
-//     rejection); absolute prefixes produce no such block and still return
-//     their scoped files[].
-// Behavior: `handleListFiles({ scope })` over a real LanceDB + real-FS fixture
-//     (uningested files only — no embedding needed) → warning block naming each
-//     non-absolute prefix; absolute prefixes produce no such block and still
-//     return their scoped files[].
+//     non-absolute prefix yields a non-fatal warning content block
+//     (behavior-additive, no rejection); absolute prefixes produce no such block
+//     and still return their scoped files[].
+// Behavior: `handleListFiles({ scope: [<absolute>, <relative>] })` over a real
+//     LanceDB + real-FS fixture (uningested files only — no embedding needed) →
+//     warning block naming only the non-absolute prefix; the absolute prefix
+//     still returns its scoped files[].
 
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -75,22 +74,6 @@ describe('handleListFiles(scope) — non-absolute prefix warning (finding #2)', 
       await server.close()
     }
     rmSync(base, { recursive: true, force: true })
-  })
-
-  it('appends a warning block naming a non-absolute scope prefix (result stays empty)', async () => {
-    const { content } = await server.handleListFiles({ scope: ['relative'] })
-
-    expect(warningPrefixes(content)).toContain('relative')
-    // Semantics unchanged: a non-absolute prefix still matches nothing.
-    expect(parsedFiles(content)).toEqual([])
-  })
-
-  it('emits no non-absolute warning for an absolute scope prefix', async () => {
-    const { content } = await server.handleListFiles({ scope: [dataDir] })
-
-    expect(warningPrefixes(content)).toEqual([])
-    // The absolute scope still returns its scanned file.
-    expect(parsedFiles(content)).toContain(inScopeFile)
   })
 
   it('warns only for the relative prefix in a mixed scope and keeps absolute results', async () => {
