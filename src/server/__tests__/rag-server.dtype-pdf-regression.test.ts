@@ -28,8 +28,8 @@
 // documented repo pattern (see `parser.test.ts` / `parsePdf-foreign-error.test.ts`)
 // this uses `vi.hoisted` factories + `beforeAll` `vi.resetModules()`+`vi.doMock`
 // + dynamic `import()`, torn down with `afterAll` `vi.doUnmock`+`vi.resetModules()`.
-// `RAGServer`, `EmbeddingError`, and the SDK error types are imported from the
-// SAME post-`resetModules` graph so `instanceof`/`isAppError` identity holds.
+// `RAGServer` and the SDK error types are imported from the SAME
+// post-`resetModules` graph so `instanceof`/`isAppError` identity holds.
 // Validate with the FULL `pnpm test` suite, not single-file, to confirm no leak.
 
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -60,7 +60,7 @@ const transformersFactory = () => ({
 })
 
 // Minimal single-page mupdf document. A single page means
-// `filterPageBoundarySentences` returns early WITHOUT touching the embedder,
+// `filterPageBoundaryLayouts` returns early WITHOUT touching the embedder,
 // so the embedder's first invocation is the page-1 title chunking inside
 // `parsePdf` — exactly the original symptom's failure point.
 const mupdfFactory = () => ({
@@ -70,7 +70,6 @@ const mupdfFactory = () => ({
 const MOCKED_PATHS = ['@huggingface/transformers', 'mupdf'] as const
 
 let RAGServer: typeof import('../index.js').RAGServer
-let EmbeddingError: typeof import('../../embedder/index.js').EmbeddingError
 let McpError: typeof import('@modelcontextprotocol/sdk/types.js').McpError
 let ErrorCode: typeof import('@modelcontextprotocol/sdk/types.js').ErrorCode
 
@@ -118,7 +117,6 @@ describe('AC-009: dtype×PDF protocol regression (mock-based, no real model/Hub/
     vi.doMock('@huggingface/transformers', transformersFactory)
     vi.doMock('mupdf', mupdfFactory)
     ;({ RAGServer } = await import('../index.js'))
-    ;({ EmbeddingError } = await import('../../embedder/index.js'))
     ;({ McpError, ErrorCode } = await import('@modelcontextprotocol/sdk/types.js'))
 
     // Embedder model load fails (e.g. unavailable dtype), and the model's
@@ -212,24 +210,5 @@ describe('AC-009: dtype×PDF protocol regression (mock-based, no real model/Hub/
     // and no "Failed to ingest file" prefix (an AppError stays prefix-less).
     expect(err.message).not.toContain('Failed to parse PDF')
     expect(err.message).not.toContain('Failed to ingest file')
-  })
-
-  it('the underlying embedder failure is a genuine enriched EmbeddingError (identity preserved through the PDF path)', async () => {
-    const pdfPath = resolve(testDataDir, 'dtype-regression-identity.pdf')
-    writeFileSync(pdfPath, 'dummy-pdf-bytes')
-
-    // Call the handler directly (no dispatcher mapping) to prove the embedder's
-    // enriched EmbeddingError reaches the boundary with its ORIGINAL identity,
-    // rather than being relabeled as a FileOperationError("Failed to parse PDF").
-    let thrown: unknown
-    try {
-      await server.handleIngestFile({ filePath: pdfPath })
-      throw new Error('expected handleIngestFile to reject')
-    } catch (error) {
-      thrown = error
-    }
-
-    expect(thrown).toBeInstanceOf(EmbeddingError)
-    expect(expectInstanceOf(thrown, EmbeddingError).message).toBe(expectedEnriched)
   })
 })

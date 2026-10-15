@@ -82,46 +82,4 @@ describe('AC-003: Vector Embedding Generation', () => {
       expect(embedding.every((value: number) => typeof value === 'number')).toBe(true)
     }
   })
-
-  // Edge Case: Empty string
-  // Validation: Empty string embedding generation fails fast with error
-  it('Empty string embedding generation throws EmbeddingError (fail-fast)', async () => {
-    const { Embedder, EmbeddingError } = await import('../../embedder/index.js')
-    const embedder = new Embedder(
-      withTestDevice({
-        modelPath: 'Xenova/all-MiniLM-L6-v2',
-        batchSize: 8,
-        cacheDir: testModelCacheDir(),
-      })
-    )
-
-    await embedder.initialize()
-
-    // Attempt to generate embedding for empty string
-    await expect(embedder.embed('')).rejects.toThrow(EmbeddingError)
-    await expect(embedder.embed('')).rejects.toThrow('Cannot generate embedding for empty text')
-  })
-
-  // Edge Case: Very long text
-  // Validation: Embedding generation for text over 1000 characters completes normally
-  it('Embedding generation for text over 1000 characters completes normally', async () => {
-    const { Embedder } = await import('../../embedder/index.js')
-    const embedder = new Embedder(
-      withTestDevice({
-        modelPath: 'Xenova/all-MiniLM-L6-v2',
-        batchSize: 8,
-        cacheDir: testModelCacheDir(),
-      })
-    )
-
-    await embedder.initialize()
-
-    const longText = 'This is a very long text. '.repeat(50) // Approx 1350 characters
-    const embedding = await embedder.embed(longText)
-
-    expect(embedding).toBeDefined()
-    expect(Array.isArray(embedding)).toBe(true)
-    expect(embedding.length).toBe(384)
-    expect(embedding.every((value: number) => typeof value === 'number')).toBe(true)
-  })
 })

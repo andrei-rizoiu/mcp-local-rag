@@ -69,7 +69,7 @@ describe('CLI ingest image persistence', () => {
     vi.resetModules()
   })
 
-  it('persists ordered image attachments and omission replaces the same PDF request-locally', async () => {
+  it('persists the image attachment and omission replaces the same PDF request-locally', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       await runIngest(['--images', '--base-dir', testRoot, pdfPath], {
@@ -83,12 +83,9 @@ describe('CLI ingest image persistence', () => {
       const attachmentRows = enabledRows
         .map((row) => parseJson<VisualAttachment[]>(row.visualAttachments ?? '[]'))
         .filter((attachments) => attachments.length > 0)
-      expect(attachmentRows.length).toBeGreaterThan(0)
+      // The fixture holds exactly one raster image, so it is stored exactly once.
+      expect(attachmentRows.flat().map((attachment) => attachment.imageIndex)).toEqual([0])
       for (const attachments of attachmentRows) {
-        expect(attachments.length).toBeGreaterThan(0)
-        expect(attachments.map((attachment) => attachment.imageIndex)).toEqual(
-          attachments.map((attachment) => attachment.imageIndex).sort((left, right) => left - right)
-        )
         expect(parseHydratedVisualAttachments(JSON.stringify(attachments))).toEqual({
           attachments,
           omittedCount: 0,

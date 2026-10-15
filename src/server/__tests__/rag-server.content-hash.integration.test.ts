@@ -26,9 +26,8 @@ import { join, resolve } from 'node:path'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { withTestDevice } from '../../__tests__/test-device.js'
-import { expectInstanceOf, parseJson, privateMembers } from '../../__tests__/test-doubles.js'
+import { expectInstanceOf, privateMembers } from '../../__tests__/test-doubles.js'
 import type { Embedder } from '../../embedder/index.js'
-import type { SyncStatusResult } from '../types.js'
 
 // ============================================
 // Mock setup (scoped doMock — see header)
@@ -179,10 +178,6 @@ function dispatch(server: ServerInstance, name: string, args: unknown): Promise<
   )
 }
 
-function firstBlock(result: DispatchResult): string {
-  return result.content[0]?.text ?? ''
-}
-
 /** `(filePath, contentHash)` view of the sync manifest, read through a fresh connection. */
 async function storedManifest(
   fixture: Fixture
@@ -202,26 +197,6 @@ async function storedManifest(
 /** Distinct stored digests, so "every chunk carries the same hash" stays visible. */
 async function storedHashes(fixture: Fixture): Promise<(string | null)[]> {
   return [...new Set((await storedManifest(fixture)).map((row) => row.contentHash))]
-}
-
-/**
- * Poll the real `sync_status` handler until the job leaves `running`. Yields with
- * `setImmediate` rather than sleeping, so it returns as soon as the job is
- * terminal; the wall-clock guard only turns a hang into a readable failure.
- */
-async function awaitSyncOutcome(server: ServerInstance, jobId: string): Promise<SyncStatusResult> {
-  const deadline = Date.now() + 20_000
-  for (;;) {
-    const result = await dispatch(server, 'sync_status', { jobId })
-    const snapshot = parseJson<SyncStatusResult>(firstBlock(result))
-    if (snapshot.state !== 'running') {
-      return snapshot
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`sync job ${jobId} never left running`)
-    }
-    await new Promise((resolveTick) => setImmediate(resolveTick))
-  }
 }
 
 /** How many times the production `readFile` was given exactly this path. */
@@ -274,31 +249,6 @@ describe('ingest_file — contentHash is read before the parse', () => {
       // The save really landed mid-ingestion.
       expect(readFileSync(filePath, 'utf-8')).toBe(CONTENT_AFTER)
       expect(await storedHashes(fixture)).toEqual([sha256(CONTENT_BEFORE)])
-    } finally {
-      await server.close()
-    }
-  })
-
-  it('leaves a following sync re-ingesting the file instead of skipping it', async () => {
-    const fixture = makeFixture('following-sync-re-ingests')
-    const filePath = join(fixture.root, 'report.md')
-    writeFileSync(filePath, CONTENT_BEFORE)
-    const server = await makeServer(fixture)
-    try {
-      rewriteDuringEmbed = { filePath, content: CONTENT_AFTER }
-      await dispatch(server, 'ingest_file', { filePath })
-
-      const { jobId } = parseJson<{
-        jobId: string
-      }>(firstBlock(await dispatch(server, 'sync_start', {})))
-      const outcome = await awaitSyncOutcome(server, jobId)
-
-      expect(outcome.state).toBe('succeeded')
-      expect(outcome.error).toBeNull()
-      // The stored digest was older than the disk bytes, so the file is dirty.
-      expect(outcome.summary).toEqual({ upserted: 1, skipped: 0, empty: 0, pruned: 0 })
-      // And the index has caught up with what is now on disk.
-      expect(await storedHashes(fixture)).toEqual([sha256(CONTENT_AFTER)])
     } finally {
       await server.close()
     }

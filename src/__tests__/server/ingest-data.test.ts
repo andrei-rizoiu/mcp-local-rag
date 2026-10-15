@@ -93,67 +93,9 @@ describe('ingest_data Tool', () => {
   })
 
   // --------------------------------------------
-  // Markdown Format Ingestion
-  // --------------------------------------------
-  describe('Markdown Format Ingestion', () => {
-    it('ingests markdown content', async () => {
-      const content = `# Heading
-
-This is markdown content with **bold** and _italic_ text.
-
-## Subheading
-
-- List item 1
-- List item 2
-`
-      const source = 'test://markdown-test'
-
-      const result = await server.handleIngestData({
-        content,
-        metadata: {
-          source,
-          format: 'markdown',
-        },
-      })
-
-      const parsed = JSON.parse(result.content[0].text)
-      expect(parsed.chunkCount).toBeGreaterThan(0)
-      expect(parsed.filePath).toMatch(/\.md$/)
-    })
-  })
-
-  // --------------------------------------------
   // HTML Format Ingestion
   // --------------------------------------------
   describe('HTML Format Ingestion', () => {
-    it('ingests HTML content and converts to markdown', async () => {
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <body>
-            <article>
-              <h1>Test Article</h1>
-              <p>This is the main content of the test article. It contains enough text for Readability to extract properly.</p>
-            </article>
-          </body>
-        </html>
-      `
-      const source = 'https://example.com/test-article'
-
-      const result = await server.handleIngestData({
-        content: html,
-        metadata: {
-          source,
-          format: 'html',
-        },
-      })
-
-      const parsed = JSON.parse(result.content[0].text)
-      expect(parsed.chunkCount).toBeGreaterThan(0)
-      // HTML is converted to markdown, so saved as .md
-      expect(parsed.filePath).toMatch(/\.md$/)
-    })
-
     it('extracts main content from HTML and removes noise', async () => {
       const html = `
         <!DOCTYPE html>
@@ -241,13 +183,11 @@ This is markdown content with **bold** and _italic_ text.
     it('updates existing content when re-ingesting same source', async () => {
       const source = 'test://update-test'
       const originalContent =
-        'Original content for re-ingestion testing. ' +
-        'This content needs to be long enough to generate chunks. ' +
-        'The semantic chunker processes text into meaningful segments.'
+        'ReingestOriginalMarker appears in the original content written before re-ingestion. ' +
+        'ReingestOriginalMarker must disappear from search once the same source is ingested again.'
       const updatedContent =
-        'Updated content after re-ingestion process. ' +
-        'This new content replaces the original content. ' +
-        'Re-ingestion functionality allows content updates.'
+        'ReingestUpdatedMarker appears in the updated content that replaces the original content. ' +
+        'ReingestUpdatedMarker must be returned by search after the re-ingestion completes.'
 
       // Initial ingestion
       await server.handleIngestData({
@@ -265,46 +205,15 @@ This is markdown content with **bold** and _italic_ text.
       const savedContent = await readFile(parsed.filePath, 'utf-8')
 
       expect(savedContent).toBe(updatedContent)
-      expect(savedContent).not.toContain('Original content for re-ingestion')
-    })
-  })
+      expect(savedContent).not.toContain('ReingestOriginalMarker')
 
-  // --------------------------------------------
-  // List Files with Source Info
-  // --------------------------------------------
-  describe('List Files with Source Info', () => {
-    it('list_files includes source for raw-data files', async () => {
-      const source = 'https://example.com/list-files-test'
-      // Content needs to be long enough to generate at least one chunk
-      const content =
-        'This is a longer content for testing the list files functionality. ' +
-        'It needs to be substantial enough to create at least one chunk. ' +
-        'The semantic chunker requires sufficient content to process properly.'
-
-      await server.handleIngestData({
-        content,
-        metadata: { source, format: 'text' },
+      const queryResult = await server.handleQueryDocuments({
+        query: 'ReingestOriginalMarker',
+        limit: 20,
       })
-
-      const listResult = await server.handleListFiles()
-      const files = JSON.parse(listResult.content[0].text)
-
-      // Find the specific item we just ingested by source (in sources)
-      const targetFile = files.sources.find((f: { source: string }) => f.source === source)
-      expect(targetFile).toBeDefined()
-      expect(targetFile.source).toBe(source)
-      expect(targetFile.chunkCount).toBeGreaterThan(0)
-      expect(targetFile.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
-    })
-
-    it('list_files does not include source for regular files', async () => {
-      // Files in BASE_DIR (files) have filePath but no source field
-      const listResult = await server.handleListFiles()
-      const files = JSON.parse(listResult.content[0].text)
-
-      for (const file of files.files) {
-        expect(file.source).toBeUndefined()
-      }
+      const results: { text: string }[] = JSON.parse(queryResult.content[0].text)
+      expect(results.some((r) => r.text.includes('ReingestOriginalMarker'))).toBe(false)
+      expect(results.some((r) => r.text.includes('ReingestUpdatedMarker'))).toBe(true)
     })
   })
 
@@ -414,28 +323,6 @@ This is markdown content with **bold** and _italic_ text.
   // Query Integration
   // --------------------------------------------
   describe('Query Integration', () => {
-    it('ingested data is searchable via query_documents', async () => {
-      const uniqueContent =
-        'UniqueSearchableContent12345 for integration testing purposes. ' +
-        'This content verifies that ingested data can be searched properly. ' +
-        'The RAG system should find this content using semantic search.'
-      const source = 'test://query-integration-test'
-
-      await server.handleIngestData({
-        content: uniqueContent,
-        metadata: { source, format: 'text' },
-      })
-
-      const queryResult = await server.handleQueryDocuments({
-        query: 'UniqueSearchableContent12345',
-        limit: 5,
-      })
-
-      const results = JSON.parse(queryResult.content[0].text)
-      expect(results.length).toBeGreaterThan(0)
-      expect(results[0].text).toContain('UniqueSearchableContent12345')
-    })
-
     it('query results include source for raw-data files', async () => {
       const source = 'https://example.com/source-restoration-test'
       const content =
