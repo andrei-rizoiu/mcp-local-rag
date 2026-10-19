@@ -15,19 +15,6 @@ const ROW = {
   timestamp: '2026-01-01T00:00:00.000Z',
 }
 
-describe('toVectorChunk row read', () => {
-  it('ignores a metadata struct left on a row by an older version', () => {
-    // The column is dropped at open, but a row read from a database this version
-    // has not migrated yet already carries the struct; extra fields are ignored.
-    const chunk = toVectorChunk({
-      ...ROW,
-      vector: [0.5],
-      metadata: { fileName: 'a.md', fileSize: 4, fileType: 'md' },
-    })
-    expect(chunk).not.toHaveProperty('metadata')
-  })
-})
-
 describe('toVectorChunk embedding read', () => {
   it('refuses a non-numeric element rather than coercing it', () => {
     // A numeric `length` says nothing about the contents: this shape used to

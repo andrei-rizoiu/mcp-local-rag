@@ -385,8 +385,7 @@ export function parseHydratedVisualAttachments(value: unknown): {
 }
 
 /**
- * The minimal range-read shape: no score (not ranked) and nothing else the
- * index-adjacent reader does not need, so the shape check is narrower than
+ * The minimal range-read shape: no score (not ranked), so the shape check is narrower than
  * {@link isLanceDBRawResult}. An empty or missing `fileTitle` reads as `null`.
  *
  * @throws DatabaseError when a required field is missing.
