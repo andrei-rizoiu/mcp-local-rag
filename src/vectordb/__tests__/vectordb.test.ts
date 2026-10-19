@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import type { Table } from '@lancedb/lancedb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { asDouble, expectDefined, privateMembers } from '../../__tests__/test-doubles.js'
+import {
+  asDouble,
+  expectDefined,
+  expectInstanceOf,
+  privateMembers,
+} from '../../__tests__/test-doubles.js'
 import type { TextChunk } from '../../chunker/index.js'
 import { ingestSingleFile, type SingleFileIngestCollaborators } from '../../cli/ingest.js'
 import { buildVectorChunks, computeContentHash } from '../../ingest/compute.js'
@@ -10,6 +16,7 @@ import { type VectorChunk, VectorStore } from '../index.js'
 import {
   type ChunkRow,
   DatabaseError,
+  FTS_INDEX_NAME,
   isLanceDBRawResult,
   type SearchResult,
   toSearchResult,
@@ -277,6 +284,108 @@ describe('VectorStore', () => {
         limit: 5,
       })
       expect(retry.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('optimize: recovery from a LanceDB native panic', () => {
+    // What napi-rs hands JavaScript for lance-format/lance#8310: the panic
+    // payload as the message when it can render it, else its fixed text; and
+    // GenericFailure as the code — the code every LanceDB error carries, so
+    // only the message identifies a panic.
+    const MERGE_PANIC = 'index out of bounds: the len is 762714 but the index is 762844'
+    const OPAQUE_PANIC = 'Panic in async function'
+    type OptimizeSeams = Pick<Table, 'optimize' | 'createIndex' | 'listIndices'>
+
+    function lanceError(message: string): Error {
+      return Object.assign(new Error(message), { code: 'GenericFailure' })
+    }
+
+    /**
+     * A store whose table and FTS index exist, with the private table handle
+     * exposed for fault injection (there is no public seam for a LanceDB
+     * panic; see the range-read failure test for the same coupling).
+     */
+    async function withSeededStore(
+      name: string,
+      fn: (store: VectorStore, table: OptimizeSeams) => Promise<void>
+    ): Promise<void> {
+      await withTempDb(name, async (store) => {
+        await store.insertChunks([
+          createTestChunk('seed', '/test/panic-probe.md', 0, createNormalizedVector(1)),
+        ])
+        expect((await store.getStatus()).ftsIndexEnabled).toBe(true)
+        const table = expectDefined(privateMembers<{ table: OptimizeSeams | null }>(store).table)
+        try {
+          await fn(store, table)
+        } finally {
+          vi.restoreAllMocks()
+        }
+      })
+    }
+
+    async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+      let thrown: unknown = null
+      try {
+        await promise
+      } catch (error) {
+        thrown = error
+      }
+      return thrown
+    }
+
+    it.each([
+      ['the panic payload', MERGE_PANIC],
+      ["napi's opaque text", OPAQUE_PANIC],
+    ])('rebuilds the FTS index in place when optimize() panics with %s', async (_, message) => {
+      await withSeededStore('optimize-panic-rebuild', async (store, table) => {
+        vi.spyOn(table, 'optimize').mockRejectedValueOnce(lanceError(message))
+        const createIndexSpy = vi.spyOn(table, 'createIndex')
+
+        await expect(store.optimize()).resolves.toBeUndefined()
+
+        expect(createIndexSpy).toHaveBeenCalledTimes(1)
+        expect(createIndexSpy).toHaveBeenCalledWith(
+          'text',
+          expect.objectContaining({ name: FTS_INDEX_NAME, replace: true })
+        )
+        const ftsIndices = (await table.listIndices()).filter((idx) => idx.indexType === 'FTS')
+        expect(ftsIndices.map((idx) => idx.name)).toEqual([FTS_INDEX_NAME])
+        expect((await store.getStatus()).searchMode).toBe('hybrid')
+        // The next optimize runs against the rebuilt index without intervention.
+        await expect(store.optimize()).resolves.toBeUndefined()
+      })
+    })
+
+    it('reports the failure and degrades to vector-only when the rebuild itself fails', async () => {
+      await withSeededStore('optimize-panic-rebuild-fails', async (store, table) => {
+        vi.spyOn(table, 'optimize').mockRejectedValueOnce(lanceError(MERGE_PANIC))
+        const rebuildFailure = lanceError('simulated index build failure')
+        vi.spyOn(table, 'createIndex').mockRejectedValueOnce(rebuildFailure)
+
+        const databaseError = expectInstanceOf(await rejectionOf(store.optimize()), DatabaseError)
+        expect(databaseError.message).toMatch(/could not be rebuilt/)
+        expect(databaseError.cause).toBe(rebuildFailure)
+        const status = await store.getStatus()
+        expect(status.ftsIndexEnabled).toBe(false)
+        expect(status.searchMode).toBe('vector-only')
+      })
+    })
+
+    it('wraps a non-panic optimize failure as DatabaseError with its cause and leaves the index alone', async () => {
+      await withSeededStore('optimize-plain-failure', async (store, table) => {
+        // Also GenericFailure, as every LanceDB error is; not a panic.
+        const commitConflict = lanceError(
+          'lance error: Retryable commit conflict for version 8: This Rewrite transaction was preempted by concurrent transaction Delete at version 8. Please retry.'
+        )
+        vi.spyOn(table, 'optimize').mockRejectedValueOnce(commitConflict)
+        const createIndexSpy = vi.spyOn(table, 'createIndex')
+
+        const databaseError = expectInstanceOf(await rejectionOf(store.optimize()), DatabaseError)
+        expect(databaseError.message).toBe('Failed to optimize')
+        expect(databaseError.cause).toBe(commitConflict)
+        expect(createIndexSpy).not.toHaveBeenCalled()
+        expect((await store.getStatus()).ftsIndexEnabled).toBe(true)
+      })
     })
   })
 
