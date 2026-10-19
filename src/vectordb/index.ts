@@ -332,10 +332,7 @@ export class VectorStore {
       console.error('VectorStore: Migrated schema - added visualProfile column')
     }
 
-    // The chunk `metadata` struct (fileName/fileSize/fileType) was written by
-    // versions up to 0.22.1 and read by nothing: dropped rather than migrated,
-    // which also removes the misleading `fileSize` name. A database this version
-    // writes still opens in an older one as long as it does not read that struct.
+    // Chunk metadata struct written by older versions; nothing reads it.
     if (hasField('metadata')) {
       await this.table.dropColumns(['metadata'])
       console.error('VectorStore: Migrated schema - dropped the unused metadata column')

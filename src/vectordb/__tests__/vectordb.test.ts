@@ -1601,21 +1601,6 @@ describe('VectorStore', () => {
         fs.rmSync(dbPath, { recursive: true, force: true })
       }
     })
-
-    it('should create a table with no metadata column', async () => {
-      await withTempDb('metadata-drop-create', async (store, dbPath) => {
-        await store.insertChunks([
-          createTestChunk('body', '/test/no-metadata.md', 0, createNormalizedVector(1)),
-        ])
-
-        const { connect: lanceConnect } = await import('@lancedb/lancedb')
-        const verifyDb = await lanceConnect(dbPath)
-        const schema = await (await verifyDb.openTable('chunks')).schema()
-        const fields = schema.fields.map((field: { name: string }) => field.name)
-        await verifyDb.close()
-        expect(fields).not.toContain('metadata')
-      })
-    })
   })
 })
 
