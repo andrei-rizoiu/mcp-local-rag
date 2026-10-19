@@ -73,18 +73,6 @@ export interface SearchOptions {
 }
 
 /**
- * Document metadata
- */
-export interface DocumentMetadata {
-  /** File name */
-  fileName: string
-  /** File size in bytes */
-  fileSize: number
-  /** File type (extension) */
-  fileType: string
-}
-
-/**
  * Validated, bounded image stored in a chunk's ordered attachment JSON.
  */
 export interface VisualAttachment {
@@ -109,8 +97,6 @@ export interface VectorChunk {
   text: string
   /** Embedding vector (dimension depends on model) */
   vector: number[]
-  /** Metadata */
-  metadata: DocumentMetadata
   /** Document title extracted from file content (display-only, not used for scoring) */
   fileTitle: string | null
   /** SHA-256 of the source file bytes; absent for chunks not ingested from a file. */
@@ -142,8 +128,6 @@ export interface SearchResult {
   text: string
   /** Distance score using dot product (0 = identical, 1 = orthogonal, 2 = opposite) */
   score: number
-  /** Metadata */
-  metadata: DocumentMetadata
   /** Document title extracted from file content (display-only, not used for scoring) */
   fileTitle: string | null
 }
@@ -162,7 +146,7 @@ export interface AttachmentHydrationResult {
 
 /**
  * Row from {@link VectorStore.getChunksByRange}. Distinct from `SearchResult`:
- * no score (not ranked) and no metadata (not needed here).
+ * no score (not ranked).
  */
 export interface ChunkRow {
   sourceContext?: SourceContext
@@ -185,7 +169,6 @@ export interface LanceDBRawResult {
   filePath: string
   chunkIndex: number
   text: string
-  metadata: DocumentMetadata
   /** Document title (optional - existing rows lack this field before migration) */
   fileTitle?: string | null
   _distance?: number
@@ -196,9 +179,6 @@ export interface LanceDBRawResult {
 // Type Guards
 // ============================================
 
-/**
- * Type guard for DocumentMetadata
- */
 /** A non-null object with a numeric `length` — indices read as `unknown`. */
 function isArrayLike(value: unknown): value is ArrayLike<unknown> {
   return isRecord(value) && typeof value['length'] === 'number'
@@ -224,17 +204,6 @@ function toEmbeddingVector(value: unknown): number[] {
   return vector
 }
 
-function isDocumentMetadata(value: unknown): value is DocumentMetadata {
-  if (!isRecord(value)) {
-    return false
-  }
-  return (
-    typeof value['fileName'] === 'string' &&
-    typeof value['fileSize'] === 'number' &&
-    typeof value['fileType'] === 'string'
-  )
-}
-
 /**
  * Type guard for LanceDB raw search result
  */
@@ -246,8 +215,7 @@ function isLanceDBRawResult(value: unknown): value is LanceDBRawResult {
     typeof value['id'] === 'string' &&
     typeof value['filePath'] === 'string' &&
     typeof value['chunkIndex'] === 'number' &&
-    typeof value['text'] === 'string' &&
-    isDocumentMetadata(value['metadata'])
+    typeof value['text'] === 'string'
   )
 }
 
@@ -269,7 +237,6 @@ export function toSearchResult(raw: unknown): SearchResult {
     chunkIndex: raw.chunkIndex,
     text: raw.text,
     score: raw._distance ?? raw._score ?? 0,
-    metadata: raw.metadata,
     fileTitle: raw.fileTitle || null,
     ...contextProperty(raw.sourceContext),
   }
@@ -279,8 +246,7 @@ export function toSearchResult(raw: unknown): SearchResult {
  * Map a raw LanceDB row to a full {@link VectorChunk}, embedding included, so
  * it round-trips back through `insertChunks` — unlike {@link toChunkRow} and
  * {@link toSearchResult}, which drop the vector. LanceDB returns a typed array,
- * normalized here to `number[]`. Arrow struct metadata is copied to a plain
- * object accepted by LanceDB's schema inference on reinsertion.
+ * normalized here to `number[]`.
  */
 export function toVectorChunk(raw: unknown): VectorChunk {
   if (!isRecord(raw)) {
@@ -292,7 +258,6 @@ export function toVectorChunk(raw: unknown): VectorChunk {
     chunkIndex,
     text,
     vector,
-    metadata,
     fileTitle,
     contentHash,
     visualAttachments,
@@ -309,16 +274,12 @@ export function toVectorChunk(raw: unknown): VectorChunk {
   ) {
     throw new DatabaseError('Invalid chunk row shape from LanceDB (scalar fields)')
   }
-  if (!isDocumentMetadata(metadata)) {
-    throw new DatabaseError('Invalid chunk row shape from LanceDB (metadata)')
-  }
   return {
     id,
     filePath,
     chunkIndex,
     text,
     vector: toEmbeddingVector(vector),
-    metadata: { ...metadata },
     fileTitle: typeof fileTitle === 'string' && fileTitle.length > 0 ? fileTitle : null,
     // Omit the key rather than store '' or undefined: the create path seeds ''
     // for schema inference, and a '' that survived to a caller would read as a
@@ -424,8 +385,8 @@ export function parseHydratedVisualAttachments(value: unknown): {
 }
 
 /**
- * The minimal range-read shape: no score (not ranked) and no metadata (not
- * needed for index-adjacent retrieval), so the shape check is narrower than
+ * The minimal range-read shape: no score (not ranked) and nothing else the
+ * index-adjacent reader does not need, so the shape check is narrower than
  * {@link isLanceDBRawResult}. An empty or missing `fileTitle` reads as `null`.
  *
  * @throws DatabaseError when a required field is missing.

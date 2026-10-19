@@ -216,9 +216,8 @@ describe('VLM PDF Enrichment - Phase 0 Equivalence (AC-008)', () => {
 
     // Literal expected shape on the first chunk to anchor the contract:
     // chunkIndex starts at 0, filePath matches the fixture, the text opens with
-    // the first body sentence, the vector has the model's 384 dimensions, metadata is populated
-    // from the file name + raw text length + extension, and the title is the
-    // fixture's H1.
+    // the first body sentence, the vector has the model's 384 dimensions, and the
+    // title is the fixture's H1.
     const first = expectDefined(serverChunks[0])
     expect(first.filePath).toBe(fixtureFilePath)
     expect(first.chunkIndex).toBe(0)
@@ -226,11 +225,6 @@ describe('VLM PDF Enrichment - Phase 0 Equivalence (AC-008)', () => {
       /^TypeScript is a strongly typed programming language that builds on JavaScript\./
     )
     expect(first.vector).toHaveLength(384)
-    expect(first.metadata).toEqual({
-      fileName: fixtureFileName,
-      fileSize: FIXTURE_TEXT.length,
-      fileType: 'md',
-    })
     expect(first.fileTitle).toBe('Phase 0 Equivalence Fixture')
 
     expect(chunkerSpy).toHaveBeenCalledTimes(2)

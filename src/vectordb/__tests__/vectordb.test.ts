@@ -41,11 +41,6 @@ describe('VectorStore', () => {
       chunkIndex,
       text,
       vector: vector || new Array(384).fill(0).map(() => Math.random()),
-      metadata: {
-        fileName: path.basename(filePath),
-        fileSize: text.length,
-        fileType: path.extname(filePath).slice(1),
-      },
       fileTitle: null,
       timestamp: new Date().toISOString(),
     }
@@ -586,7 +581,6 @@ describe('VectorStore', () => {
           filePath: '/test/doc.md',
           chunkIndex: 0,
           text: 'Test content',
-          metadata: { fileName: 'doc.md', fileSize: 100, fileType: 'md' },
           _distance: 0.5,
           fileTitle: 'My Document',
         }
@@ -601,7 +595,6 @@ describe('VectorStore', () => {
           filePath: '/test/doc.md',
           chunkIndex: 0,
           text: 'Test content',
-          metadata: { fileName: 'doc.md', fileSize: 100, fileType: 'md' },
           _distance: 0.5,
         }
 
@@ -628,6 +621,7 @@ describe('VectorStore', () => {
             chunkIndex: 0,
             text: 'Old document without fileTitle',
             vector: createNormalizedVector(1),
+            // The nested struct 0.22.1 wrote; the migration drops it.
             metadata: {
               fileName: 'old-doc.txt',
               fileSize: 100,
@@ -652,11 +646,6 @@ describe('VectorStore', () => {
             chunkIndex: 0,
             text: 'New document with fileTitle',
             vector: createNormalizedVector(2),
-            metadata: {
-              fileName: 'new-doc.txt',
-              fileSize: 100,
-              fileType: 'txt',
-            },
             fileTitle: 'New Document Title',
             timestamp: new Date().toISOString(),
           }
@@ -1042,7 +1031,6 @@ describe('VectorStore', () => {
           createNormalizedVector(2),
           createNormalizedVector(3),
         ],
-        fileSize: 42,
         fileTitle: null,
         contentHash: HELLO_SHA256,
       })
@@ -1060,7 +1048,6 @@ describe('VectorStore', () => {
         filePath: '/test/hashless.md',
         chunks: textChunks(2),
         embeddings: [createNormalizedVector(1), createNormalizedVector(2)],
-        fileSize: 42,
         fileTitle: null,
         contentHash: null,
       })
@@ -1560,6 +1547,76 @@ describe('VectorStore', () => {
       })
     })
   })
+
+  describe('metadata column removal', () => {
+    it('should drop the unused metadata column from a table written before the removal', async () => {
+      const dbPath = './tmp/test-vectordb-metadata-drop-migration'
+      fs.rmSync(dbPath, { recursive: true, force: true })
+
+      try {
+        // A database written by 0.22.1 carries the nested `metadata` struct.
+        // Nothing reads it, so the migration drops it rather than renaming the
+        // misleading `fileSize` inside it.
+        const { connect: lanceConnect } = await import('@lancedb/lancedb')
+        const legacyDb = await lanceConnect(dbPath)
+        await legacyDb.createTable('chunks', [
+          {
+            id: randomUUID(),
+            filePath: '/test/legacy-metadata.md',
+            chunkIndex: 0,
+            text: 'Row written before the metadata column was dropped',
+            vector: createNormalizedVector(1),
+            metadata: { fileName: 'legacy-metadata.md', fileSize: 48, fileType: 'md' },
+            fileTitle: 'Legacy document',
+            timestamp: new Date().toISOString(),
+          },
+        ])
+        await legacyDb.close()
+
+        // Opening through the store runs ensureSchemaVersion.
+        const reopened = new VectorStore({ dbPath, tableName: 'chunks' })
+        await reopened.initialize()
+
+        const verifyDb = await lanceConnect(dbPath)
+        const schema = await (await verifyDb.openTable('chunks')).schema()
+        const fields = schema.fields.map((field: { name: string }) => field.name)
+        await verifyDb.close()
+        expect(fields).not.toContain('metadata')
+
+        const legacyRows = await reopened.getChunksByFilePath('/test/legacy-metadata.md')
+        expect(legacyRows).toHaveLength(1)
+        expect(legacyRows[0]?.text).toBe('Row written before the metadata column was dropped')
+        expect(legacyRows[0]).not.toHaveProperty('metadata')
+
+        // The migrated table must still accept an insert: a row still carrying
+        // the dropped struct would be rejected by LanceDB's schema check.
+        await reopened.insertChunks([
+          createTestChunk('after the drop', '/test/after-drop.md', 0, createNormalizedVector(2)),
+        ])
+        const inserted = await reopened.getChunksByFilePath('/test/after-drop.md')
+        expect(inserted).toHaveLength(1)
+        expect(inserted[0]?.text).toBe('after the drop')
+        await reopened.close()
+      } finally {
+        fs.rmSync(dbPath, { recursive: true, force: true })
+      }
+    })
+
+    it('should create a table with no metadata column', async () => {
+      await withTempDb('metadata-drop-create', async (store, dbPath) => {
+        await store.insertChunks([
+          createTestChunk('body', '/test/no-metadata.md', 0, createNormalizedVector(1)),
+        ])
+
+        const { connect: lanceConnect } = await import('@lancedb/lancedb')
+        const verifyDb = await lanceConnect(dbPath)
+        const schema = await (await verifyDb.openTable('chunks')).schema()
+        const fields = schema.fields.map((field: { name: string }) => field.name)
+        await verifyDb.close()
+        expect(fields).not.toContain('metadata')
+      })
+    })
+  })
 })
 
 describe('visualAttachments schema and hydration', () => {
@@ -1573,7 +1630,6 @@ describe('visualAttachments schema and hydration', () => {
       chunkIndex: 0,
       text: 'searchable attachment text',
       vector: new Array(384).fill(0).map((_, index) => (index === 0 ? 1 : 0)),
-      metadata: { fileName: path.basename(filePath), fileSize: 26, fileType: 'pdf' },
       fileTitle: null,
       visualAttachments,
       timestamp: new Date().toISOString(),
@@ -1740,7 +1796,6 @@ describe('visualProfile schema and persistence', () => {
       chunkIndex: 0,
       text: 'profile carrying text',
       vector: new Array(384).fill(0).map((_, index) => (index === 0 ? 1 : 0)),
-      metadata: { fileName: path.basename(filePath), fileSize: 21, fileType: 'pdf' },
       fileTitle: null,
       contentHash: 'a'.repeat(64),
       timestamp: new Date().toISOString(),

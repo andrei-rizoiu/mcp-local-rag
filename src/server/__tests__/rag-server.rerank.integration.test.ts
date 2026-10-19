@@ -94,7 +94,6 @@ function searchResult(index: number): SearchResult {
     chunkIndex: index,
     text: `body of chunk ${index}`,
     score: index / 100,
-    metadata: { fileName: `doc-${index}.md`, fileSize: 100, fileType: 'md' },
     fileTitle: `Title ${index}`,
   }
 }

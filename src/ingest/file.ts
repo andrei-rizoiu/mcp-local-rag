@@ -28,7 +28,6 @@ export interface PreparedFileIngest {
   filePath: string
   chunks: Awaited<ReturnType<typeof buildChunksFromParseResult>>['chunks']
   embeddings: number[][]
-  textLength: number
   title: string | null
   contentHash: string
   /** Requested visual intent of this run: a profile for a captioned PDF, `null` otherwise. */
@@ -42,7 +41,6 @@ export function buildPreparedFileVectorChunks(prepared: PreparedFileIngest): Vec
     filePath: prepared.filePath,
     chunks: prepared.chunks,
     embeddings: prepared.embeddings,
-    fileSize: prepared.textLength,
     fileTitle: prepared.title,
     contentHash: prepared.contentHash,
     visualProfile: prepared.visualProfile,
@@ -74,7 +72,6 @@ export async function prepareFileForIngest(
   const contentHash = await readPreParseContentHash(filePath, parser)
   const isPdf = filePath.toLowerCase().endsWith('.pdf')
 
-  let text: string
   let title: string | null
   let chunks: Awaited<ReturnType<typeof buildChunksFromParseResult>>['chunks']
   let embeddings: Awaited<ReturnType<typeof buildChunksFromParseResult>>['embeddings']
@@ -87,7 +84,6 @@ export async function prepareFileForIngest(
       ...(options.captioner === undefined ? {} : { captioner: options.captioner }),
     }
     const result = await prepareVisualPdfChunks(filePath, collaborators, visualOptions)
-    text = result.text
     title = result.title
     chunks = result.chunks
     embeddings = result.embeddings
@@ -97,7 +93,6 @@ export async function prepareFileForIngest(
     const result = isPdf
       ? await parser.parsePdf(filePath, embedder)
       : await parser.parseFile(filePath, { images: options.images })
-    text = result.content
     title = result.title || null
     ;({ chunks, embeddings, visualAttachments, omittedImageCount } =
       await buildChunksFromParseResult(result, chunker, embedder))
@@ -107,7 +102,6 @@ export async function prepareFileForIngest(
     filePath,
     chunks,
     embeddings,
-    textLength: text.length,
     title,
     contentHash,
     visualProfile: isPdf ? (options.captioner?.profile ?? null) : null,

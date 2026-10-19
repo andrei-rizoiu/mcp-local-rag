@@ -29,11 +29,6 @@ function createChunk(filePath: string, text: string, chunkIndex = 0): VectorChun
     chunkIndex,
     text,
     vector: [1, 0, 0],
-    metadata: {
-      fileName: path.basename(filePath),
-      fileSize: text.length,
-      fileType: path.extname(filePath).slice(1),
-    },
     fileTitle: `Title for ${path.basename(filePath)}`,
     contentHash: `hash-${chunkIndex}-${text.length}`,
     visualAttachments: '[]',
@@ -68,9 +63,8 @@ function plainRow(value: unknown): Record<string, unknown> {
     throw new Error('Expected LanceDB to return a row object')
   }
   const vector = value['vector']
-  const metadata = value['metadata']
-  if (!isArrayLike(vector) || !isRecord(metadata)) {
-    throw new Error('Expected LanceDB rows to contain vector and metadata fields')
+  if (!isArrayLike(vector)) {
+    throw new Error('Expected LanceDB rows to contain a vector field')
   }
 
   const normalizedVector: number[] = []
@@ -84,7 +78,6 @@ function plainRow(value: unknown): Record<string, unknown> {
   return {
     ...value,
     vector: normalizedVector,
-    metadata: { ...metadata },
   }
 }
 

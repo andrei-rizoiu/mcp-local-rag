@@ -5,7 +5,6 @@
 // because the rollback semantics differ between the MCP and CLI paths.
 
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, extname } from 'node:path'
 import type { AtomicTextRange, SemanticChunker, TextChunk } from '../chunker/index.js'
 import { type EmbedderInterface, resolveContainmentBudget } from '../chunker/semantic-chunker.js'
 import type { ParseResult } from '../parser/index.js'
@@ -260,7 +259,6 @@ export function buildVectorChunks(params: {
   filePath: string
   chunks: (TextChunk & { sourceContext?: SourceContext })[]
   embeddings: number[][]
-  fileSize: number
   fileTitle: string | null
   contentHash: string | null
   visualAttachments?: ReadonlyMap<number, readonly VisualAttachment[]>
@@ -270,7 +268,6 @@ export function buildVectorChunks(params: {
     filePath,
     chunks,
     embeddings,
-    fileSize,
     fileTitle,
     contentHash,
     visualAttachments = new Map(),
@@ -295,11 +292,6 @@ export function buildVectorChunks(params: {
       chunkIndex: chunk.index,
       text: chunk.text,
       vector: embedding,
-      metadata: {
-        fileName: basename(filePath),
-        fileSize,
-        fileType: extname(filePath).slice(1),
-      },
       fileTitle,
       ...(chunk.sourceContext ? { sourceContext: JSON.stringify(chunk.sourceContext) } : {}),
       ...(contentHash === null ? {} : { contentHash }),

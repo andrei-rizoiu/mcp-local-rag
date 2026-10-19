@@ -373,7 +373,6 @@ describe('query_documents attachment warning isolation', () => {
       chunkIndex: 3,
       text: 'first preserved text',
       score: 0.1,
-      metadata: { fileName: 'first.pdf', fileSize: 100, fileType: 'pdf' },
       fileTitle: 'First',
     },
     {
@@ -382,7 +381,6 @@ describe('query_documents attachment warning isolation', () => {
       chunkIndex: 7,
       text: 'second preserved text',
       score: 0.2,
-      metadata: { fileName: 'second.pdf', fileSize: 200, fileType: 'pdf' },
       fileTitle: 'Second',
     },
     {
@@ -391,7 +389,6 @@ describe('query_documents attachment warning isolation', () => {
       chunkIndex: 11,
       text: 'third preserved text',
       score: 0.3,
-      metadata: { fileName: 'third.pdf', fileSize: 300, fileType: 'pdf' },
       fileTitle: 'Third',
     },
     {
@@ -400,7 +397,6 @@ describe('query_documents attachment warning isolation', () => {
       chunkIndex: 13,
       text: 'fourth preserved text',
       score: 0.4,
-      metadata: { fileName: 'fourth.pdf', fileSize: 400, fileType: 'pdf' },
       fileTitle: 'Fourth',
     },
   ]

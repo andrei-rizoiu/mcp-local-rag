@@ -67,12 +67,11 @@ describe('prepareFileForIngest', () => {
     expect(result.omittedImageCount).toBe(0)
     expect(vectorChunks).toHaveLength(2)
     expect(
-      vectorChunks.map(({ filePath, chunkIndex, text, vector, metadata, fileTitle }) => ({
+      vectorChunks.map(({ filePath, chunkIndex, text, vector, fileTitle }) => ({
         filePath,
         chunkIndex,
         text,
         vector,
-        metadata,
         fileTitle,
       }))
     ).toEqual([
@@ -81,7 +80,6 @@ describe('prepareFileForIngest', () => {
         chunkIndex: 0,
         text: 'First chunk',
         vector: [1, 0],
-        metadata: { fileName: 'document.md', fileSize: 20, fileType: 'md' },
         fileTitle: 'Document title',
       },
       {
@@ -89,7 +87,6 @@ describe('prepareFileForIngest', () => {
         chunkIndex: 1,
         text: 'Second chunk',
         vector: [0, 1],
-        metadata: { fileName: 'document.md', fileSize: 20, fileType: 'md' },
         fileTitle: 'Document title',
       },
     ])

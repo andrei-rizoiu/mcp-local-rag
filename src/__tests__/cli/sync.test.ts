@@ -206,7 +206,6 @@ async function seedRows(
           sourceEnd: index * 10 + 8,
         })),
         embeddings: Array.from({ length: chunkCount }, (_, index) => unitVector(index + 1)),
-        fileSize: 64,
         fileTitle: null,
         contentHash,
       })
