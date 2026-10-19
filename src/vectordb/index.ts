@@ -36,6 +36,32 @@ export type {
 } from './types.js'
 
 // ============================================
+// LanceDB native-panic detection
+// ============================================
+
+/**
+ * How napi-rs hands JavaScript a Rust panic that escaped an async binding: the
+ * `Error` message is the panic payload when napi can render it and the fixed
+ * text "Panic in async function" otherwise (napi 3.x, `tokio_runtime.rs`). Its
+ * `code` is the same `GenericFailure` every ordinary LanceDB error carries, so
+ * the message is the only discriminator. The second signature is the payload of
+ * the known FTS merge panic (lance-format/lance#8310), a Rust bounds check:
+ * "index out of bounds: the len is N but the index is M".
+ */
+const NATIVE_PANIC_SIGNATURES: readonly string[] = [
+  'Panic in async function',
+  'index out of bounds: the len is',
+]
+
+/** Whether `error` is a Rust panic surfaced by napi-rs rather than a LanceDB error. */
+function isNativePanic(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    NATIVE_PANIC_SIGNATURES.some((signature) => error.message.includes(signature))
+  )
+}
+
+// ============================================
 // VectorStore Class
 // ============================================
 
@@ -267,20 +293,7 @@ export class VectorStore {
       return
     }
 
-    // Create new FTS index with ngram tokenizer for multilingual support
-    // - min=2: Capture Japanese bi-grams (e.g., "東京", "設計")
-    // - max=3: Balance between precision and index size
-    // - prefixOnly=false: Generate ngrams from all positions for proper CJK support
-    await this.table.createIndex('text', {
-      config: Index.fts({
-        baseTokenizer: 'ngram',
-        ngramMinLength: 2,
-        ngramMaxLength: 3,
-        prefixOnly: false,
-        stem: false,
-      }),
-      name: FTS_INDEX_NAME,
-    })
+    await this.createFtsIndex(this.table)
     this.ftsEnabled = true
     console.error(`VectorStore: FTS index "${FTS_INDEX_NAME}" created successfully`)
 
@@ -291,6 +304,29 @@ export class VectorStore {
         console.error(`VectorStore: Dropped old FTS index "${idx.name}"`)
       }
     }
+  }
+
+  /**
+   * Build the FTS index from scratch. `replace: true` is LanceDB's default,
+   * written out because {@link rebuildFtsIndexAfterPanic} depends on it: an
+   * existing index of the same name is swapped for the new one in one commit.
+   */
+  private async createFtsIndex(table: Table): Promise<void> {
+    // Create new FTS index with ngram tokenizer for multilingual support
+    // - min=2: Capture Japanese bi-grams (e.g., "東京", "設計")
+    // - max=3: Balance between precision and index size
+    // - prefixOnly=false: Generate ngrams from all positions for proper CJK support
+    await table.createIndex('text', {
+      config: Index.fts({
+        baseTokenizer: 'ngram',
+        ngramMinLength: 2,
+        ngramMaxLength: 3,
+        prefixOnly: false,
+        stem: false,
+      }),
+      name: FTS_INDEX_NAME,
+      replace: true,
+    })
   }
 
   /**
@@ -338,6 +374,10 @@ export class VectorStore {
    *
    * The caller decides when — once per ingest rather than per insert, to avoid
    * O(n^2) during bulk work.
+   *
+   * A Rust panic inside `table.optimize()` is recovered from by rebuilding the
+   * FTS index ({@link rebuildFtsIndexAfterPanic}); any other failure is a
+   * `DatabaseError` with the LanceDB error as its cause.
    */
   async optimize(): Promise<void> {
     await this.openExistingTable()
@@ -346,7 +386,45 @@ export class VectorStore {
     }
 
     const cleanupThreshold = new Date(Date.now() - FTS_CLEANUP_THRESHOLD_MS)
-    await this.table.optimize({ cleanupOlderThan: cleanupThreshold })
+    try {
+      await this.table.optimize({ cleanupOlderThan: cleanupThreshold })
+    } catch (error) {
+      if (!isNativePanic(error)) {
+        throw new DatabaseError('Failed to optimize', { cause: toError(error) })
+      }
+      await this.rebuildFtsIndexAfterPanic(this.table, error)
+    }
+  }
+
+  /**
+   * Recover from a Rust panic inside `table.optimize()`.
+   *
+   * lance-index 7.0.0 panicked in the FTS incremental merge once an index held
+   * tokens whose rows had since been deleted (lance-format/lance#8310; seen on
+   * @lancedb/lancedb 0.30.0 and 0.31.0; fixed by lance#8312 in lance-index
+   * 11.0.0, shipped in @lancedb/lancedb 0.38.0). The panic is deterministic
+   * against the on-disk index, so every later `optimize()` fails the same way
+   * and the FTS index never updates again, while {@link ensureFtsIndex} sees
+   * an index by the expected name and leaves it alone. The only repair LanceDB
+   * offers is a full rebuild. `replace: true` commits it as one swap, so a
+   * build that fails leaves the old index serving searches; the store then
+   * degrades to vector-only until restart and reports the failure like any
+   * other maintenance error.
+   */
+  private async rebuildFtsIndexAfterPanic(table: Table, panic: Error): Promise<void> {
+    console.error(
+      `VectorStore: table.optimize() panicked inside LanceDB (${panic.message}); rebuilding FTS index "${FTS_INDEX_NAME}" from scratch`
+    )
+    try {
+      await this.createFtsIndex(table)
+    } catch (rebuildError) {
+      this.ftsEnabled = false
+      throw new DatabaseError(
+        `Failed to optimize: LanceDB panicked and the FTS index "${FTS_INDEX_NAME}" could not be rebuilt; search is vector-only until restart`,
+        { cause: toError(rebuildError) }
+      )
+    }
+    console.error(`VectorStore: FTS index "${FTS_INDEX_NAME}" rebuilt`)
   }
 
   /**
