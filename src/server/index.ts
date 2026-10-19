@@ -667,7 +667,6 @@ export class RAGServer {
         filePath,
         chunks,
         embeddings,
-        fileSize: text.length,
         fileTitle: title,
         contentHash: computeContentHash(sourceBytes),
       }),

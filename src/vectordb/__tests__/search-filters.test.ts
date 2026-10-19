@@ -1,4 +1,3 @@
-import { basename } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { expectDefined } from '../../__tests__/test-doubles.js'
 import {
@@ -24,7 +23,6 @@ function mockResult(
     chunkIndex,
     text,
     score,
-    metadata: { fileName: basename(filePath), fileSize: 100, fileType: '.txt' },
     fileTitle: null,
   }
 }

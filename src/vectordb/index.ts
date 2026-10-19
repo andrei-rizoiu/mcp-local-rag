@@ -294,9 +294,10 @@ export class VectorStore {
   }
 
   /**
-   * Ensure schema is up to date by adding missing columns.
+   * Ensure schema is up to date by adding missing columns and dropping the ones
+   * nothing reads.
    * Uses table.addColumns() API for top-level column additions.
-   * Idempotent: checks for column existence before adding.
+   * Idempotent: checks for column existence before adding or dropping.
    */
   private async ensureSchemaVersion(): Promise<void> {
     if (!this.table) {
@@ -329,6 +330,15 @@ export class VectorStore {
     if (!hasField('visualProfile')) {
       await this.table.addColumns([{ name: 'visualProfile', valueSql: 'cast(NULL as string)' }])
       console.error('VectorStore: Migrated schema - added visualProfile column')
+    }
+
+    // The chunk `metadata` struct (fileName/fileSize/fileType) was written by
+    // versions up to 0.22.1 and read by nothing: dropped rather than migrated,
+    // which also removes the misleading `fileSize` name. A database this version
+    // writes still opens in an older one as long as it does not read that struct.
+    if (hasField('metadata')) {
+      await this.table.dropColumns(['metadata'])
+      console.error('VectorStore: Migrated schema - dropped the unused metadata column')
     }
   }
 
@@ -378,7 +388,7 @@ export class VectorStore {
       const ftsResults = await table
         .search(queryText, 'fts', 'text')
         .where(whereClause)
-        .select(['filePath', 'chunkIndex', 'text', 'metadata', '_score'])
+        .select(['filePath', 'chunkIndex', 'text', '_score'])
         .limit(results.length * 2) // Enough to cover all vector results
         .toArray()
 
@@ -424,16 +434,7 @@ export class VectorStore {
       let query = this.table
         .vectorSearch(queryVector)
         .distanceType('dot')
-        .select([
-          'id',
-          'filePath',
-          'chunkIndex',
-          'text',
-          'metadata',
-          'fileTitle',
-          'sourceContext',
-          '_distance',
-        ])
+        .select(['id', 'filePath', 'chunkIndex', 'text', 'fileTitle', 'sourceContext', '_distance'])
         .limit(candidateLimit)
 
       // Restrict to chunks under the given prefixes (exact-or-descendant)

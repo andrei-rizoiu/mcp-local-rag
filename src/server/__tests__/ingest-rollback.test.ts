@@ -44,7 +44,6 @@ async function seedProfiledRows(
         vector[index] = 1
         return vector
       }),
-      fileSize: 160,
       fileTitle: 'Prior visual title',
       contentHash: `seeded-hash-${visualProfile}`,
       visualProfile,

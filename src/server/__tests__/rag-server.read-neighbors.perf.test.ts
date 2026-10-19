@@ -50,7 +50,6 @@ describe('read_chunk_neighbors performance', () => {
           chunkIndex: index,
           text: `synthetic chunk ${index}`,
           vector,
-          metadata: { fileName: 'read-neighbors-perf.txt', fileSize: 0, fileType: 'txt' },
           fileTitle: null,
           timestamp,
         })
