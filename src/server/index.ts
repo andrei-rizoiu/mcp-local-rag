@@ -185,6 +185,26 @@ const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   'delete_file',
 ])
 
+/**
+ * Tools a shared, read-only connection exposes (see {@link RAGServer.connectReadOnly}).
+ * `sync_status` is left out: a read-only connection can never start a sync job.
+ */
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'query_documents',
+  'read_chunk_neighbors',
+  'list_files',
+  'status',
+])
+
+function assertToolAvailable(toolName: string, readOnly: boolean): void {
+  if (readOnly && !READ_ONLY_TOOLS.has(toolName)) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Tool ${toolName} is not available on a read-only server. Ingestion runs through the import scripts.`
+    )
+  }
+}
+
 const packageManifest: unknown = createRequire(import.meta.url)('../../package.json')
 const packageVersion =
   isRecord(packageManifest) && typeof packageManifest['version'] === 'string'
@@ -369,7 +389,7 @@ export class RAGServer {
       maxFileSize: config.maxFileSize,
     })
 
-    this.setupHandlers()
+    this.setupHandlers(config.readOnly === true)
   }
 
   /**
@@ -418,20 +438,32 @@ export class RAGServer {
   /**
    * Set up MCP handlers
    */
-  private setupHandlers(): void {
+  private setupHandlers(readOnly: boolean): void {
+    this.registerHandlers(this.server, readOnly)
+  }
+
+  /**
+   * Register the tool list and dispatcher on `server`. With `readOnly`, only
+   * {@link READ_ONLY_TOOLS} are listed or callable, so the mutation guard is
+   * never reached and one instance can serve many connections.
+   */
+  private registerHandlers(server: Server, readOnly: boolean): void {
     // Tool list
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: toolDefinitions,
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: readOnly
+        ? toolDefinitions.filter((tool) => READ_ONLY_TOOLS.has(tool.name))
+        : toolDefinitions,
     }))
 
     // The handlers carry no error mapping: every error reaches the single catch
     // below with its ORIGINAL identity, which logs the full cause chain to
     // stderr and maps it for the client. `TOOL_ERROR_CONTEXT` holds each
     // handler's message policy, so that table lives in one place.
-    this.server.setRequestHandler(
+    server.setRequestHandler(
       CallToolRequestSchema,
       async (request: { params: { name: string; arguments?: unknown } }) => {
         const toolName = request.params.name
+        assertToolAvailable(toolName, readOnly)
         // The mutation guard sits here, on the external dispatch path only, so
         // an internal call such as `handleIngestData` -> `handleIngestFile`
         // cannot reacquire it and self-deadlock.
@@ -1372,6 +1404,22 @@ export class RAGServer {
    */
   async connect(transport: Transport): Promise<void> {
     await this.server.connect(transport)
+  }
+
+  /**
+   * Serve one more client over `transport` with the read-only tools only. Each
+   * call gets its own protocol session; all of them share this instance's
+   * vector store and embedder. Without mutation tools there is no write lock to
+   * share, which is what lifts the one-client rule above.
+   */
+  async connectReadOnly(transport: Transport): Promise<Server> {
+    const server = new Server(
+      { name: 'rag-mcp-server', version: packageVersion },
+      { capabilities: { tools: {} } }
+    )
+    this.registerHandlers(server, true)
+    await server.connect(transport)
+    return server
   }
 
   /**
