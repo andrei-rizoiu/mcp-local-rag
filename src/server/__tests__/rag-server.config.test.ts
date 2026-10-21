@@ -98,6 +98,25 @@ describe('EMBED_HEADING_PREFIX configuration', () => {
   })
 })
 
+describe('IGNORE_PATHS configuration', () => {
+  const cwd = resolve('./tmp/test-lancedb-config-shape')
+
+  it('threads the parsed patterns, and no patterns when unset', async () => {
+    expect((await resolveServerConfig({ BASE_DIR: cwd }, cwd)).ignorePatterns).toEqual([])
+    const configured = await resolveServerConfig(
+      { BASE_DIR: cwd, IGNORE_PATHS: '["plugs/**","**/*.draft.md"]' },
+      cwd
+    )
+    expect(configured.ignorePatterns).toEqual(['plugs/**', '**/*.draft.md'])
+  })
+
+  it('refuses to start on a value that is not a JSON array', async () => {
+    await expect(
+      resolveServerConfig({ BASE_DIR: cwd, IGNORE_PATHS: 'plugs/**:drafts/**' }, cwd)
+    ).rejects.toThrow(/^IGNORE_PATHS must be a JSON array/)
+  })
+})
+
 describe('RAGServerConfig degraded-mode construction guards (P3-T1)', () => {
   const testDbPath = resolve('./tmp/test-lancedb-config-shape')
 

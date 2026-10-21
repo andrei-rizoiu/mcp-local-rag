@@ -11,12 +11,12 @@ import { extname, resolve, sep } from 'node:path'
 
 import { SUPPORTED_EXTENSIONS } from '../parser/index.js'
 import { MAX_SCAN_DEPTH } from '../utils/limits.js'
-import { bfsCollectSupportedFiles } from '../utils/scan.js'
+import { bfsCollectSupportedFiles, type ScanExclusion } from '../utils/scan.js'
 
 export async function collectFiles(
   targetPath: string,
   baseDirs: readonly string[],
-  excludePaths: string[]
+  exclusion: ScanExclusion
 ): Promise<string[]> {
   const resolved = resolve(targetPath)
   const info = await stat(resolved)
@@ -59,7 +59,7 @@ export async function collectFiles(
       files: collected,
       unreadableDirs,
       depthLimited,
-    } = await bfsCollectSupportedFiles(resolved, excludePaths)
+    } = await bfsCollectSupportedFiles(resolved, exclusion)
 
     for (const { dirPath } of unreadableDirs) {
       console.error(`Warning: cannot read directory: ${dirPath}`)

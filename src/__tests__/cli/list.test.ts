@@ -36,7 +36,11 @@ const fsPromisesFactory = async (
   }
 }
 
-const cliCommonFactory = () => ({
+const cliCommonFactory = async () => ({
+  // Real: the stub must still export the pure exclusion builder.
+  buildCliScanExclusionOrExit: (
+    await vi.importActual<typeof import('../../cli/common.js')>('../../cli/common.js')
+  ).buildCliScanExclusionOrExit,
   createVectorStore: vi.fn().mockImplementation(() => ({
     initialize: mocks.initialize,
     listFiles: mocks.listFiles,

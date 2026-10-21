@@ -4,7 +4,7 @@
 
 import { displayPath } from '../utils/base-dirs.js'
 import { MAX_SCAN_DEPTH } from '../utils/limits.js'
-import { bfsCollectSupportedFiles } from '../utils/scan.js'
+import { bfsCollectSupportedFiles, type ScanExclusion } from '../utils/scan.js'
 import type { RAGServerConfig } from './types.js'
 
 /**
@@ -18,12 +18,12 @@ import type { RAGServerConfig } from './types.js'
  */
 export async function scanBaseDir(
   baseDir: string,
-  excludePaths: readonly string[],
+  exclusion: ScanExclusion,
   scope?: string[]
 ): Promise<{ files: string[]; warnings: string[] }> {
   const { files, unreadableDirs, depthLimited } = await bfsCollectSupportedFiles(
     baseDir,
-    excludePaths,
+    exclusion,
     {
       maxDepth: MAX_SCAN_DEPTH,
       scope,

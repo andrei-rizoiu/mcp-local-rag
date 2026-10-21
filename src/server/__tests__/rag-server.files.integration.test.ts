@@ -138,6 +138,10 @@ describe('AC-007: File Management', () => {
 
       mkdirSync(resolve(excludeTestBase, 'docs'), { recursive: true })
       writeFileSync(resolve(excludeTestBase, 'docs', 'notes.txt'), 'Notes in docs subdirectory')
+      writeFileSync(
+        resolve(excludeTestBase, 'docs', 'plan.draft.txt'),
+        'Draft matching IGNORE_PATHS'
+      )
 
       excludeServer = new RAGServer(
         withTestDevice({
@@ -146,6 +150,7 @@ describe('AC-007: File Management', () => {
           cacheDir: testModelCacheDir(excludeTestCache),
           baseDir: excludeTestBase,
           maxFileSize: 100 * 1024 * 1024,
+          ignorePatterns: ['**/*.draft.txt'],
         })
       )
 
@@ -167,6 +172,16 @@ describe('AC-007: File Management', () => {
 
       expect(filePaths).not.toContain(resolve(excludeTestDb, 'db-internal.txt'))
       expect(filePaths).not.toContain(resolve(excludeTestCache, 'model-cache.txt'))
+    })
+
+    it('Files matching IGNORE_PATHS excluded from list_files scan', async () => {
+      const result = await excludeServer.handleListFiles()
+      const parsed = JSON.parse(result.content[0].text)
+
+      const filePaths: string[] = parsed.files.map((f: { filePath: string }) => f.filePath)
+
+      expect(filePaths).toContain(resolve(excludeTestBase, 'docs', 'notes.txt'))
+      expect(filePaths).not.toContain(resolve(excludeTestBase, 'docs', 'plan.draft.txt'))
     })
 
     it('raw-data .md files inside dbPath excluded from files array', async () => {

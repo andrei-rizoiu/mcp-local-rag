@@ -10,7 +10,7 @@
 // region apart from a whole-scan failure.
 
 import { lstat, readdir, realpath } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, join, posix, relative, resolve, sep } from 'node:path'
 import { SUPPORTED_EXTENSIONS } from '../parser/index.js'
 import { MAX_SCAN_DEPTH } from './limits.js'
 import { isInScope, isUnderOrEqual, shouldVisitDir } from './scope-match.js'
@@ -61,7 +61,7 @@ export async function canonicalizeRequestedPath(path: string): Promise<string | 
 export type ScanRejection =
   /** A symbolic link, which is never followed. */
   | 'symlink'
-  /** Under a configured excluded prefix (the database or cache directory). */
+  /** Under the database or cache directory, or a file matching an `IGNORE_PATHS` pattern. */
   | 'excluded'
   /** A regular file whose extension is not a supported document type. */
   | 'unsupported'
@@ -70,6 +70,50 @@ export type ScanRejection =
 
 /** What a path is, once the collect predicates have judged it. */
 export type ScanEntryKind = 'file' | 'directory' | ScanRejection
+
+/** What the collect predicates refuse as `'excluded'`. */
+export interface ScanExclusion {
+  /** Database and cache directories, each with a trailing separator. */
+  prefixes: readonly string[]
+  ignore?: {
+    /** Configured roots in both spellings, which `patterns` are relative to. */
+    roots: readonly string[]
+    patterns: readonly string[]
+  }
+}
+
+export function buildScanExclusion(input: {
+  dbPath: string
+  cacheDir: string
+  roots: { baseDirs: readonly string[]; rawBaseDirs: readonly string[] }
+  ignorePatterns: readonly string[] | undefined
+}): ScanExclusion {
+  return {
+    prefixes: [`${resolve(input.dbPath)}${sep}`, `${resolve(input.cacheDir)}${sep}`],
+    // Realpath spellings too: a walk may start from a realpath'd target (macOS
+    // cwd), which the resolve()-spelled roots would not lexically contain.
+    ignore: {
+      roots: [...input.roots.rawBaseDirs, ...input.roots.baseDirs],
+      patterns: input.ignorePatterns ?? [],
+    },
+  }
+}
+
+/**
+ * True when a pattern matches `filePath` relative to the root containing it,
+ * spelled with `/` on every OS.
+ */
+function matchesIgnorePattern(filePath: string, ignore: ScanExclusion['ignore']): boolean {
+  if (ignore === undefined || ignore.patterns.length === 0) {
+    return false
+  }
+  const root = ignore.roots.find((candidate) => isUnderOrEqual(filePath, candidate))
+  if (root === undefined) {
+    return false
+  }
+  const relativePath = relative(root, filePath).split(sep).join('/')
+  return ignore.patterns.some((pattern) => posix.matchesGlob(relativePath, pattern))
+}
 
 /** The `Dirent` / `Stats` subset the collect predicates read. */
 interface EntryTypeFacts {
@@ -113,7 +157,8 @@ function isUnderExcludedPrefix(
  * rules rather than by two implementations that drift.
  *
  * Evaluation order is part of the contract: a symbolic link is reported as a
- * link even under an excluded prefix, and a directory needs no extension test.
+ * link even under an excluded prefix, a directory needs no extension test, and
+ * ignore patterns apply to supported files only.
  *
  * `platform` is a parameter so the Windows exclusion semantics are provable on
  * a POSIX host. Both `Dirent` and `Stats` satisfy {@link EntryTypeFacts}.
@@ -121,13 +166,13 @@ function isUnderExcludedPrefix(
 export function classifyScanEntry(
   fullPath: string,
   entry: EntryTypeFacts,
-  excludePaths: readonly string[],
+  exclusion: ScanExclusion,
   platform: NodeJS.Platform = process.platform
 ): ScanEntryKind {
   if (entry.isSymbolicLink()) {
     return 'symlink'
   }
-  if (isUnderExcludedPrefix(fullPath, excludePaths, platform)) {
+  if (isUnderExcludedPrefix(fullPath, exclusion.prefixes, platform)) {
     return 'excluded'
   }
   if (entry.isDirectory()) {
@@ -136,7 +181,10 @@ export function classifyScanEntry(
   if (!entry.isFile()) {
     return 'irregular'
   }
-  return SUPPORTED_EXTENSIONS.has(extname(fullPath).toLowerCase()) ? 'file' : 'unsupported'
+  if (!SUPPORTED_EXTENSIONS.has(extname(fullPath).toLowerCase())) {
+    return 'unsupported'
+  }
+  return matchesIgnorePattern(fullPath, exclusion.ignore) ? 'excluded' : 'file'
 }
 
 /**
@@ -154,11 +202,11 @@ export function classifyScanEntry(
  */
 export async function classifyRequestedPath(
   path: string,
-  excludePaths: readonly string[],
+  exclusion: ScanExclusion,
   platform: NodeJS.Platform = process.platform
 ): Promise<ScanEntryKind | 'missing'> {
   try {
-    return classifyScanEntry(path, await lstat(path), excludePaths, platform)
+    return classifyScanEntry(path, await lstat(path), exclusion, platform)
   } catch {
     return 'missing'
   }
@@ -203,7 +251,7 @@ async function readDirEntries(
 
 /** How one directory's entries are classified. */
 interface ScanRules {
-  excludePaths: readonly string[]
+  exclusion: ScanExclusion
   scope: string[] | undefined
   platform: NodeJS.Platform
 }
@@ -228,7 +276,7 @@ function sortEntries(
 ): void {
   for (const entry of entries) {
     const fullPath = join(visit.dirPath, entry.name)
-    const kind = classifyScanEntry(fullPath, entry, rules.excludePaths, rules.platform)
+    const kind = classifyScanEntry(fullPath, entry, rules.exclusion, rules.platform)
     if (kind === 'symlink') {
       sinks.skippedSymlinks.push(fullPath)
     } else if (kind === 'directory' && shouldVisitDir(fullPath, rules.scope)) {
@@ -258,7 +306,7 @@ export interface BfsCollectOptions {
  */
 export async function bfsCollectSupportedFiles(
   rootPath: string,
-  excludePaths: readonly string[],
+  exclusion: ScanExclusion,
   options: BfsCollectOptions = {}
 ): Promise<DirScanResult> {
   const { maxDepth = MAX_SCAN_DEPTH, scope, platform = process.platform } = options
@@ -296,7 +344,7 @@ export async function bfsCollectSupportedFiles(
     sortEntries(
       read.entries,
       visit,
-      { excludePaths, scope, platform },
+      { exclusion, scope, platform },
       {
         files,
         skippedSymlinks,

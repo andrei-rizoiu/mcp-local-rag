@@ -637,7 +637,9 @@ describe('CLI sync', () => {
     expect(calls.scanArgs).toEqual(
       fixture.roots.map((root) => [
         `${root}${sep}`,
-        [`${resolve(fixture.dbPath)}${sep}`, `${resolve(fixture.cacheDir)}${sep}`],
+        expect.objectContaining({
+          prefixes: [`${resolve(fixture.dbPath)}${sep}`, `${resolve(fixture.cacheDir)}${sep}`],
+        }),
         { maxDepth: MAX_SCAN_DEPTH },
       ])
     )
@@ -673,7 +675,9 @@ describe('CLI sync', () => {
     const scanCall = expectDefined(calls.scanArgs[0])
     expect(scanCall).toEqual([
       requestedDir,
-      [`${resolve(fixture.dbPath)}${sep}`, `${resolve(fixture.cacheDir)}${sep}`],
+      expect.objectContaining({
+        prefixes: [`${resolve(fixture.dbPath)}${sep}`, `${resolve(fixture.cacheDir)}${sep}`],
+      }),
       { maxDepth: MAX_SCAN_DEPTH },
     ])
     expect(scanCall[2]).not.toHaveProperty('scope')
@@ -766,7 +770,7 @@ describe('CLI sync', () => {
 
     expect(outcome.exitCode).toBe(1)
     expect(outcome.stderr.filter((line) => line.startsWith('Error:'))).toEqual([
-      `Error: Sync path is inside the database or cache directory: ${managedPath}`,
+      `Error: Sync path is excluded (database or cache directory, or IGNORE_PATHS): ${managedPath}`,
     ])
     expect(calls.createEmbedder).toBe(0)
     expect(await storedManifest(fixture)).toEqual([])

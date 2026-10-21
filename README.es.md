@@ -38,7 +38,7 @@ modelo por primera vez, la incorporación de texto y la búsqueda funcionan sin 
 
 ### Requisitos
 
-- Node.js 22 o posterior
+- Node.js 22.20 o posterior
 - Acceso a Internet durante el primer uso para descargar el paquete npm y el modelo de embeddings
 - Un directorio con los documentos que quieras consultar
 
@@ -274,6 +274,7 @@ Mantén el mismo `DB_PATH` si los comandos deben compartir un índice.
 |---------------------|----------|---------|-------------|
 | `BASE_DIR` | `--base-dir` | Directorio actual | Un directorio raíz; la opción de la CLI puede repetirse en `ingest`, `list` y `sync` |
 | `BASE_DIRS` | No disponible | sin configurar | Matriz JSON de directorios raíz; tiene prioridad sobre `BASE_DIR` |
+| `IGNORE_PATHS` | No disponible | sin configurar | Matriz JSON de patrones glob para archivos que deben quedar fuera del índice |
 | `DB_PATH` | `--db-path` | `./lancedb/` | Ubicación de la base de datos vectorial |
 | `CACHE_DIR` | `--cache-dir` | `./models/` | Directorio de caché de modelos |
 | `HF_ENDPOINT` | No disponible | `https://huggingface.co` | Dirección de descarga de modelos de Hugging Face; usa la URL de un servidor espejo si las descargas directas están bloqueadas |
@@ -285,6 +286,14 @@ Prioridad: directorios de la CLI, `BASE_DIRS`, `BASE_DIR` y directorio actual. S
 fuente de mayor prioridad; los directorios de distintas fuentes no se combinan. Un `BASE_DIRS`
 incorrecto produce un error. Las rutas relativas de `DB_PATH` y `CACHE_DIR` parten del
 directorio de trabajo.
+
+Para dejar archivos fuera del índice, configura `IGNORE_PATHS` con una matriz JSON de patrones
+glob, por ejemplo `IGNORE_PATHS='["plugs/**","**/*.draft.md"]'`. Cada patrón se compara con la
+ruta del archivo relativa al directorio raíz que lo contiene, escrita con `/` en cualquier
+sistema operativo. `*` y `**` no coinciden con nombres que empiezan por `.`, así que escribe
+esos directorios completos, como `".obsidian/**"`. Cuando `ingest`, `list` y `sync` recorren un
+directorio, omiten los archivos que coinciden, y `sync` retira del índice los que ya estaban
+indexados. Un `IGNORE_PATHS` incorrecto produce un error.
 
 </details>
 

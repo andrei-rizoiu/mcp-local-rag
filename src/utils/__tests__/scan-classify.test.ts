@@ -11,7 +11,12 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MAX_SCAN_DEPTH } from '../limits.js'
-import { bfsCollectSupportedFiles, classifyRequestedPath, classifyScanEntry } from '../scan.js'
+import {
+  bfsCollectSupportedFiles,
+  buildScanExclusion,
+  classifyRequestedPath,
+  classifyScanEntry,
+} from '../scan.js'
 
 // ============================================
 // Fixtures
@@ -72,7 +77,7 @@ const itWithFifos = fifoSupported() ? it : it.skip
 // ============================================
 
 describe('classifyScanEntry', () => {
-  const EXCLUDED = [`${resolve('/db')}${sep}`]
+  const EXCLUDED = { prefixes: [`${resolve('/db')}${sep}`] }
 
   it('reports a symbolic link as a link even under an excluded prefix', () => {
     expect(
@@ -122,6 +127,47 @@ describe('classifyScanEntry', () => {
   })
 })
 
+describe('classifyScanEntry with IGNORE_PATHS patterns', () => {
+  const ROOT = resolve('/vault')
+  const IGNORING = {
+    prefixes: [],
+    ignore: { roots: [`${ROOT}${sep}`], patterns: ['plugs/**', '**/*.draft.md'] },
+  }
+  const underRoot = (relativePath: string): string => join(ROOT, ...relativePath.split('/'))
+
+  it.each(['plugs/a.md', 'plugs/deep/b.md', 'notes/x.draft.md'])(
+    'excludes %s, matched relative to its root',
+    (relativePath) => {
+      expect(classifyScanEntry(underRoot(relativePath), entryFacts('file'), IGNORING)).toBe(
+        'excluded'
+      )
+    }
+  )
+
+  it.each(['notes/plugs/a.md', 'notes/x.md'])('keeps %s', (relativePath) => {
+    expect(classifyScanEntry(underRoot(relativePath), entryFacts('file'), IGNORING)).toBe('file')
+  })
+
+  it('applies patterns to files, not to directories', () => {
+    expect(classifyScanEntry(underRoot('plugs'), entryFacts('directory'), IGNORING)).toBe(
+      'directory'
+    )
+  })
+
+  it('matches a walk spelled through the realpath of a symlinked root', () => {
+    const realRoot = resolve('/private/vault')
+    const exclusion = buildScanExclusion({
+      dbPath: resolve('/db'),
+      cacheDir: resolve('/cache'),
+      roots: { rawBaseDirs: [`${ROOT}${sep}`], baseDirs: [`${realRoot}${sep}`] },
+      ignorePatterns: ['plugs/**'],
+    })
+    expect(classifyScanEntry(join(realRoot, 'plugs', 'a.md'), entryFacts('file'), exclusion)).toBe(
+      'excluded'
+    )
+  })
+})
+
 // ============================================
 // classifyRequestedPath (real filesystem)
 // ============================================
@@ -129,7 +175,7 @@ describe('classifyScanEntry', () => {
 describe('classifyRequestedPath', () => {
   const caseDir = join(TMP_ROOT, 'requested')
   const dbDir = join(caseDir, 'db')
-  const excludePaths = [`${dbDir}${sep}`]
+  const exclusion = { prefixes: [`${dbDir}${sep}`] }
   const supportedFile = join(caseDir, 'doc.md')
   const unsupportedFile = join(caseDir, 'archive.bin')
   const managedFile = join(dbDir, 'raw-data', 'captured.md')
@@ -158,29 +204,29 @@ describe('classifyRequestedPath', () => {
   })
 
   it('accepts a supported regular file', async () => {
-    expect(await classifyRequestedPath(supportedFile, excludePaths)).toBe('file')
+    expect(await classifyRequestedPath(supportedFile, exclusion)).toBe('file')
   })
 
   it('accepts a directory', async () => {
-    expect(await classifyRequestedPath(caseDir, excludePaths)).toBe('directory')
+    expect(await classifyRequestedPath(caseDir, exclusion)).toBe('directory')
   })
 
   it('reports an absent path as missing', async () => {
-    expect(await classifyRequestedPath(join(caseDir, 'ghost.md'), excludePaths)).toBe('missing')
+    expect(await classifyRequestedPath(join(caseDir, 'ghost.md'), exclusion)).toBe('missing')
   })
 
   it('refuses an unsupported extension', async () => {
-    expect(await classifyRequestedPath(unsupportedFile, excludePaths)).toBe('unsupported')
+    expect(await classifyRequestedPath(unsupportedFile, exclusion)).toBe('unsupported')
   })
 
   it('refuses a path inside an excluded directory', async () => {
-    expect(await classifyRequestedPath(managedFile, excludePaths)).toBe('excluded')
+    expect(await classifyRequestedPath(managedFile, exclusion)).toBe('excluded')
   })
 
   itWithSymlinks('refuses a symbolic link instead of resolving to its target', async () => {
     // `lstat`, not `stat`: the target is a readable supported file outside every
     // configured root, so following the link is exactly the leak to avoid.
-    expect(await classifyRequestedPath(linkPath, excludePaths)).toBe('symlink')
+    expect(await classifyRequestedPath(linkPath, exclusion)).toBe('symlink')
   })
 
   itWithFifos(
@@ -188,7 +234,7 @@ describe('classifyRequestedPath', () => {
     async () => {
       // The whole point: a read of this path never returns. The tight timeout is
       // the assertion that classification does not read.
-      expect(await classifyRequestedPath(fifoPath, excludePaths)).toBe('irregular')
+      expect(await classifyRequestedPath(fifoPath, exclusion)).toBe('irregular')
     },
     5000
   )
@@ -209,7 +255,7 @@ describe('exclude-prefix comparison, case differences', () => {
   const dbFile = join(dbDir, 'raw.md')
   const documentFile = join(caseDir, 'report.md')
   // The same directory as `dbDir`, spelled in a different case, prefixed exactly
-  // the way both adapters build `excludePaths`.
+  // the way `buildScanExclusion` builds its prefixes.
   const differentlyCasedDbPrefix = `${dbDir.toLowerCase()}${sep}`
 
   beforeAll(async () => {
@@ -224,31 +270,39 @@ describe('exclude-prefix comparison, case differences', () => {
 
   const walkedFiles = async (platform: NodeJS.Platform): Promise<string[]> =>
     (
-      await bfsCollectSupportedFiles(caseDir, [differentlyCasedDbPrefix], {
-        maxDepth: MAX_SCAN_DEPTH,
-        platform,
-      })
+      await bfsCollectSupportedFiles(
+        caseDir,
+        { prefixes: [differentlyCasedDbPrefix] },
+        {
+          maxDepth: MAX_SCAN_DEPTH,
+          platform,
+        }
+      )
     ).files.sort()
 
   it('excludes a path that differs from its prefix only in case under win32', async () => {
     expect(await walkedFiles('win32')).toEqual([documentFile])
-    expect(await classifyRequestedPath(dbFile, [differentlyCasedDbPrefix], 'win32')).toBe(
-      'excluded'
-    )
+    expect(
+      await classifyRequestedPath(dbFile, { prefixes: [differentlyCasedDbPrefix] }, 'win32')
+    ).toBe('excluded')
   })
 
   it('keeps the comparison case-sensitive on a POSIX platform', async () => {
     expect(await walkedFiles('linux')).toEqual([dbFile, documentFile].sort())
-    expect(await classifyRequestedPath(dbFile, [differentlyCasedDbPrefix], 'linux')).toBe('file')
+    expect(
+      await classifyRequestedPath(dbFile, { prefixes: [differentlyCasedDbPrefix] }, 'linux')
+    ).toBe('file')
   })
 
   // The prefixes carry a trailing separator, so `startsWith` matched the
   // directory's contents but never the directory itself.
   it('excludes the database directory itself, not only its contents', async () => {
     const ownPrefix = `${dbDir}${sep}`
-    expect(await classifyRequestedPath(dbDir, [ownPrefix], 'linux')).toBe('excluded')
-    expect(await classifyRequestedPath(dbDir, [ownPrefix], 'win32')).toBe('excluded')
-    expect(await classifyRequestedPath(documentFile, [ownPrefix], 'linux')).toBe('file')
+    expect(await classifyRequestedPath(dbDir, { prefixes: [ownPrefix] }, 'linux')).toBe('excluded')
+    expect(await classifyRequestedPath(dbDir, { prefixes: [ownPrefix] }, 'win32')).toBe('excluded')
+    expect(await classifyRequestedPath(documentFile, { prefixes: [ownPrefix] }, 'linux')).toBe(
+      'file'
+    )
   })
 
   // A symlink inside the excluded directory is the observable proof: reaching it
@@ -257,10 +311,14 @@ describe('exclude-prefix comparison, case differences', () => {
   itWithSymlinks('does not descend into the excluded directory during a walk', async () => {
     symlinkSync(documentFile, join(dbDir, 'alias.md'), 'file')
 
-    const result = await bfsCollectSupportedFiles(caseDir, [`${dbDir}${sep}`], {
-      maxDepth: MAX_SCAN_DEPTH,
-      platform: 'linux',
-    })
+    const result = await bfsCollectSupportedFiles(
+      caseDir,
+      { prefixes: [`${dbDir}${sep}`] },
+      {
+        maxDepth: MAX_SCAN_DEPTH,
+        platform: 'linux',
+      }
+    )
 
     expect(result.files).toEqual([documentFile])
     expect(result.skippedSymlinks).toEqual([])

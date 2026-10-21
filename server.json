@@ -34,6 +34,13 @@
           "isSecret": false
         },
         {
+          "name": "IGNORE_PATHS",
+          "description": "JSON array of glob patterns for files to keep out of the index, each matched against the file's path relative to its root (e.g. '[\"plugs/**\",\"**/*.draft.md\"]').",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
           "name": "DB_PATH",
           "description": "Path to LanceDB database directory (defaults to ./lancedb/)",
           "isRequired": false,

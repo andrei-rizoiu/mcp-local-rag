@@ -25,7 +25,7 @@ mcp-local-rag 在本机为 PDF、DOCX、Markdown 和文本文件建立索引。�
 
 ### 使用要求
 
-- Node.js 22 或更高版本
+- Node.js 22.20 或更高版本
 - 首次使用时需要联网下载 npm 包和嵌入模型
 - 一个包含待搜索文档的目录
 
@@ -231,12 +231,15 @@ MCP 服务器读取环境变量，CLI 支持下表中的变量和参数。需要
 |---------------------|----------|---------|-------------|
 | `BASE_DIR` | `--base-dir` | 当前目录 | 一个文档根目录；`ingest`、`list` 和 `sync` 可重复使用该 CLI 参数 |
 | `BASE_DIRS` | 不适用 | 未设置 | 文档根目录的 JSON 数组；优先于 `BASE_DIR` |
+| `IGNORE_PATHS` | 不适用 | 未设置 | 不建立索引的文件的 glob 模式 JSON 数组 |
 | `DB_PATH` | `--db-path` | `./lancedb/` | 向量数据库位置 |
 | `CACHE_DIR` | `--cache-dir` | `./models/` | 模型缓存目录 |
 | `HF_ENDPOINT` | 不适用 | `https://huggingface.co` | Hugging Face 模型下载地址；无法直接下载时使用镜像地址 |
 | `MAX_FILE_SIZE` | `--max-file-size` | `104857600`（100 MB） | 最大文件大小（字节） |
 
 文件操作仅限已配置的根目录。多个目录可用 `BASE_DIRS='["/absolute/docs","/absolute/specs"]'`，或在 CLI 中重复传入 `--base-dir`。优先级依次为 CLI 根目录、`BASE_DIRS`、`BASE_DIR`、当前目录。只采用优先级最高的配置来源，不会合并不同来源的根目录。无效的 `BASE_DIRS` 会报错。相对的 `DB_PATH` 和 `CACHE_DIR` 以进程工作目录为起点。
+
+如需让某些文件不进入索引，可将 `IGNORE_PATHS` 设为 glob 模式的 JSON 数组，例如 `IGNORE_PATHS='["plugs/**","**/*.draft.md"]'`。每个模式与文件相对于其所在文档根目录的路径进行匹配，在所有操作系统上都用 `/` 书写。`*` 和 `**` 不匹配以 `.` 开头的名称，这类目录需要写全，例如 `".obsidian/**"`。`ingest`、`list` 和 `sync` 扫描目录时会跳过匹配的文件，`sync` 还会从索引中移除已建立索引的匹配文件。无效的 `IGNORE_PATHS` 会报错。
 
 </details>
 

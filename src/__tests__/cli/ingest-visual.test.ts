@@ -106,7 +106,11 @@ const chunkerFactory = () => ({
   }),
 })
 
-const cliCommonFactory = () => ({
+const cliCommonFactory = async () => ({
+  // Real: the stub must still export the pure exclusion builder.
+  buildCliScanExclusionOrExit: (
+    await vi.importActual<typeof import('../../cli/common.js')>('../../cli/common.js')
+  ).buildCliScanExclusionOrExit,
   createEmbedder: vi.fn().mockImplementation(() => ({
     embedBatch: mocks.embedBatch,
     titlePrefix: mocks.titlePrefix,
@@ -124,12 +128,10 @@ const cliCommonFactory = () => ({
   // realpath I/O the production resolver performs. The visual tests do not
   // exercise base-dir precedence — they only need a valid config so the
   // `DocumentParser` constructor receives a `baseDirs` array.
-  resolveCliBaseDirsOrExit: vi.fn().mockImplementation((cliRoots: string[]) =>
-    Promise.resolve({
-      config: { baseDirs: cliRoots.length > 0 ? cliRoots : ['/mock/cwd/'] },
-      warnings: [],
-    })
-  ),
+  resolveCliBaseDirsOrExit: vi.fn().mockImplementation((cliRoots: string[]) => {
+    const baseDirs = cliRoots.length > 0 ? cliRoots : ['/mock/cwd/']
+    return Promise.resolve({ config: { baseDirs, rawBaseDirs: baseDirs }, warnings: [] })
+  }),
 })
 
 // Real-shaped region orchestrator. Captions remain isolated per region and

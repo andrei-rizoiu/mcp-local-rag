@@ -40,7 +40,7 @@ et la recherche fonctionnent hors ligne.
 
 ### Prérequis
 
-- Node.js 22 ou version ultérieure
+- Node.js 22.20 ou version ultérieure
 - Une connexion Internet lors de la première utilisation pour télécharger le paquet npm et le modèle d'embeddings
 - Un répertoire contenant les documents à rechercher
 
@@ -278,6 +278,7 @@ indiquées. Gardez le même `DB_PATH` si vos commandes doivent partager un index
 |---------------------|----------|---------|-------------|
 | `BASE_DIR` | `--base-dir` | Répertoire courant | Une racine documentaire ; l'option CLI peut être répétée avec `ingest`, `list` et `sync` |
 | `BASE_DIRS` | Non disponible | non définie | Tableau JSON de racines documentaires ; prioritaire sur `BASE_DIR` |
+| `IGNORE_PATHS` | Non disponible | non définie | Tableau JSON de motifs glob pour les fichiers à exclure de l'index |
 | `DB_PATH` | `--db-path` | `./lancedb/` | Emplacement de la base de données vectorielle |
 | `CACHE_DIR` | `--cache-dir` | `./models/` | Répertoire du cache des modèles |
 | `HF_ENDPOINT` | Non disponible | `https://huggingface.co` | Adresse de téléchargement des modèles Hugging Face ; utilisez l'URL d'un miroir si les téléchargements directs sont bloqués |
@@ -289,6 +290,14 @@ CLI `--base-dir`. Priorité : racines CLI, `BASE_DIRS`, `BASE_DIR`, puis répert
 Seule la source ayant la priorité la plus élevée est retenue ; les racines des différentes
 sources ne sont pas fusionnées. Un `BASE_DIRS` incorrect provoque une erreur. Les chemins
 relatifs `DB_PATH` et `CACHE_DIR` partent du répertoire de travail.
+
+Pour exclure des fichiers de l'index, définissez `IGNORE_PATHS` avec un tableau JSON de motifs
+glob, par exemple `IGNORE_PATHS='["plugs/**","**/*.draft.md"]'`. Chaque motif est comparé au
+chemin du fichier relatif à la racine qui le contient, écrit avec `/` sur tous les systèmes. `*`
+et `**` ne correspondent pas aux noms qui commencent par `.` : écrivez ces répertoires en
+entier, comme `".obsidian/**"`. Quand `ingest`, `list` et `sync` traitent un répertoire, ils
+ignorent les fichiers correspondants, et `sync` retire de l'index ceux qui y figurent déjà. Un
+`IGNORE_PATHS` incorrect provoque une erreur.
 
 </details>
 

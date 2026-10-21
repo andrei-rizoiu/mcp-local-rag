@@ -220,7 +220,10 @@ async function storedPaths(fixture: Fixture): Promise<string[]> {
  * external ~90MB download and is non-deterministic across devices, while row,
  * path, and job-state correctness is what these tests are about.
  */
-async function makeServer(fixture: Fixture): Promise<ServerInstance> {
+async function makeServer(
+  fixture: Fixture,
+  ignorePatterns: string[] = []
+): Promise<ServerInstance> {
   const server = new RAGServer(
     withTestDevice({
       dbPath: fixture.dbPath,
@@ -230,6 +233,7 @@ async function makeServer(fixture: Fixture): Promise<ServerInstance> {
       cacheDir: fixture.cacheDir,
       baseDirs: fixture.roots,
       maxFileSize: 100 * 1024 * 1024,
+      ignorePatterns,
     })
   )
   const embedder = privateMembers<{ embedder: Embedder }>(server).embedder
@@ -665,7 +669,9 @@ describe('MCP sync tools', () => {
     expect(scanArgs).toEqual(
       fixture.roots.map((root) => [
         root,
-        [`${resolve(fixture.dbPath)}${sep}`, `${resolve(fixture.cacheDir)}${sep}`],
+        expect.objectContaining({
+          prefixes: [`${resolve(fixture.dbPath)}${sep}`, `${resolve(fixture.cacheDir)}${sep}`],
+        }),
         { maxDepth: MAX_SCAN_DEPTH },
       ])
     )
@@ -681,6 +687,32 @@ describe('MCP sync tools', () => {
     expect(
       terminal.warnings.some((warning) => warning.includes(deepDir.slice(TMP_ROOT.length)))
     ).toBe(true)
+  }, 45000)
+
+  it('removes an indexed file that now matches IGNORE_PATHS and never ingests one', async () => {
+    const fixture = await makeFixture('ignore-paths')
+    const root = fixture.roots[0] ?? ''
+    const keptPath = await writeFixtureFile(
+      join(root, 'notes', 'kept.md'),
+      `kept ${'a'.repeat(200)}`
+    )
+    const indexedContent = `indexed before the pattern ${'b'.repeat(200)}`
+    const indexedPath = await writeFixtureFile(join(root, 'plugs', 'indexed.md'), indexedContent)
+    await writeFixtureFile(join(root, 'plugs', 'new.md'), `never indexed ${'c'.repeat(200)}`)
+    await seedRows(fixture, indexedPath, sha256(indexedContent))
+
+    const server = await makeServer(fixture, ['plugs/**'])
+    let terminal: SyncStatusResult
+    try {
+      const jobId = await syncStart(server)
+      terminal = lastSnapshot(await pollUntilTerminal(server, jobId))
+    } finally {
+      await server.close()
+    }
+
+    expect(terminal.state).toBe('succeeded')
+    expect(terminal.summary).toEqual({ upserted: 1, skipped: 0, empty: 0, pruned: 1 })
+    expect(await storedPaths(fixture)).toEqual([keptPath])
   }, 45000)
 
   // --------------------------------------------
