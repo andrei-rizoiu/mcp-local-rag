@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -67,8 +67,10 @@ import {
 } from '../utils/raw-data-utils.js'
 import {
   bfsCollectSupportedFiles,
+  buildScanExclusion,
   canonicalizeRequestedPath,
   classifyRequestedPath,
+  type ScanExclusion,
 } from '../utils/scan.js'
 import { nonAbsolutePrefixes } from '../utils/scope-match.js'
 import { isRecord } from '../utils/type-guards.js'
@@ -256,8 +258,7 @@ export class RAGServer {
   /** Legacy single-root accessor for `rawBaseDirs`. Derived from `rawBaseDirs[0]`. */
   private readonly rawBaseDir: string
   private readonly cacheDir: string
-  // Used by handleListFiles filter to exclude system-managed directories
-  private readonly excludePaths: string[]
+  private readonly scanExclusion: ScanExclusion
   private readonly configWarnings: string[]
   /**
    * When non-null the server is in degraded mode: `status` stays callable so the
@@ -310,7 +311,12 @@ export class RAGServer {
     this.storeImages = config.storeImages ?? false
     this.rerankCommand = config.rerankCommand
     this.rerankTimeoutMs = config.rerankTimeoutMs ?? DEFAULT_RERANK_TIMEOUT_MS
-    this.excludePaths = [`${resolve(this.dbPath)}${sep}`, `${resolve(this.cacheDir)}${sep}`]
+    this.scanExclusion = buildScanExclusion({
+      dbPath: this.dbPath,
+      cacheDir: this.cacheDir,
+      roots: { baseDirs: this.baseDirs, rawBaseDirs },
+      ignorePatterns: config.ignorePatterns,
+    })
     this.server = new Server(
       { name: 'rag-mcp-server', version: packageVersion },
       { capabilities: { tools: {} } }
@@ -963,7 +969,7 @@ export class RAGServer {
       dbPath: this.dbPath,
       ingested,
       scope,
-      scan: (baseDir, scanScope) => scanBaseDir(baseDir, this.excludePaths, scanScope),
+      scan: (baseDir, scanScope) => scanBaseDir(baseDir, this.scanExclusion, scanScope),
     })
     const files: FileEntry[] = listed.files
     const sources: SourceEntry[] = listed.sources
@@ -1244,12 +1250,12 @@ export class RAGServer {
       // A path whose read would never return (a FIFO) is refused here too, which
       // matters more on this surface than on the CLI: the mutation guard is
       // released by this job's promise settling, and nothing else would.
-      classifyPath: async (path: string) => await classifyRequestedPath(path, this.excludePaths),
+      classifyPath: async (path: string) => await classifyRequestedPath(path, this.scanExclusion),
       // No `scope` argument, on purpose: a scope-pruned directory appears in
       // none of the coverage arrays, which would hide an unobserved region and
       // make prune unsafe.
       scanDir: async (rootPath: string) =>
-        await bfsCollectSupportedFiles(rootPath, this.excludePaths, { maxDepth: MAX_SCAN_DEPTH }),
+        await bfsCollectSupportedFiles(rootPath, this.scanExclusion, { maxDepth: MAX_SCAN_DEPTH }),
       // Size first, bytes second: `maxFileSize` is otherwise enforced inside the
       // parser, which runs long after the whole file would already be in memory
       // here. Declining (`null`) keeps the rest of the run usable instead of
@@ -1297,7 +1303,7 @@ export class RAGServer {
       // decides requested-path containment in (the parser's boundary domain).
       canonicalRoots: this.baseDirs,
       dbPath: this.dbPath,
-      excludePaths: this.excludePaths,
+      excludePaths: this.scanExclusion.prefixes,
       platform: process.platform,
       // resolve() (never realpath) so the requested path is spelled like the
       // stored DB keys; the core validates it against the configured roots.

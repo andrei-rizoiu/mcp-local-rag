@@ -1,7 +1,6 @@
 // CLI ingest subcommand — bulk file ingestion with single optimize() at end
 
 import { stat } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
 
 import { SemanticChunker } from '../chunker/index.js'
 import { DocumentEmbeddingSession } from '../embedder/embedding-snapshot.js'
@@ -21,6 +20,7 @@ import {
 import type { QualityProfile } from '../utils/visual-profile.js'
 import type { VectorStore } from '../vectordb/index.js'
 import {
+  buildCliScanExclusionOrExit,
   createEmbedder,
   createVectorStore,
   formatCliError,
@@ -393,7 +393,11 @@ export async function runIngest(args: string[], globalOptions: GlobalOptions = {
   // Resolve config: CLI flags > env vars > defaults
   const globalConfig = resolveGlobalConfig(globalOptions)
   const config = await resolveConfig(globalConfig, options)
-  const excludePaths = [`${resolve(config.dbPath)}${sep}`, `${resolve(config.cacheDir)}${sep}`]
+  const exclusion = buildCliScanExclusionOrExit({
+    dbPath: config.dbPath,
+    cacheDir: config.cacheDir,
+    roots: config.baseDirs,
+  })
 
   // Surface resolver warnings (precedence, nested-root pruning) on stderr
   // before scan output starts.
@@ -403,7 +407,7 @@ export async function runIngest(args: string[], globalOptions: GlobalOptions = {
 
   // Directory mode scans only the positional directory; configured roots are
   // the containment boundary used by collectFiles and DocumentParser.
-  const files = await collectFiles(targetPath, config.baseDirs.baseDirs, excludePaths)
+  const files = await collectFiles(targetPath, config.baseDirs.baseDirs, exclusion)
   if (files.length === 0) {
     console.error('No supported files found.')
     process.exit(1)

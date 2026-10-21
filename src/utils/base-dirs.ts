@@ -93,22 +93,23 @@ export function displayPath(path: string): string {
 }
 
 // ============================================
-// JSON-array parser for BASE_DIRS
+// JSON-array parsers for BASE_DIRS and IGNORE_PATHS
 // ============================================
 
+type StringArrayParse =
+  | { ok: true; value: string[] }
+  | { ok: false; message: string; cause?: Error }
+
 /**
- * Parse `BASE_DIRS`: only a JSON array of non-empty strings is accepted, so
- * delimiter syntax like `'/a:/b'` is an error rather than a silent misread.
- * Syntax only — existence is {@link normalizeRealpath}'s job.
+ * Only a JSON array of non-empty strings is accepted, so delimiter syntax like
+ * `'/a:/b'` is an error rather than a silent misread.
  */
-export function parseBaseDirsEnv(raw: string): ParseBaseDirsResult {
+function parseJsonStringArray(name: string, noun: string, raw: string): StringArrayParse {
   const trimmed = raw.trim()
   if (trimmed.length === 0) {
     return {
       ok: false,
-      error: new BaseDirsConfigError(
-        'BASE_DIRS must be a JSON array of non-empty path strings (received empty value).'
-      ),
+      message: `${name} must be a JSON array of non-empty ${noun} strings (received empty value).`,
     }
   }
 
@@ -118,27 +119,20 @@ export function parseBaseDirsEnv(raw: string): ParseBaseDirsResult {
   } catch (error) {
     return {
       ok: false,
-      error: new BaseDirsConfigError(
-        `BASE_DIRS must be a JSON array of non-empty path strings. Failed to parse as JSON: ${truncate(raw)}`,
-        { cause: toError(error) }
-      ),
+      message: `${name} must be a JSON array of non-empty ${noun} strings. Failed to parse as JSON: ${truncate(raw)}`,
+      cause: toError(error),
     }
   }
 
   if (!Array.isArray(parsed)) {
     return {
       ok: false,
-      error: new BaseDirsConfigError(
-        `BASE_DIRS must be a JSON array (received ${describeJsonShape(parsed)}).`
-      ),
+      message: `${name} must be a JSON array (received ${describeJsonShape(parsed)}).`,
     }
   }
 
   if (parsed.length === 0) {
-    return {
-      ok: false,
-      error: new BaseDirsConfigError('BASE_DIRS must not be an empty array.'),
-    }
+    return { ok: false, message: `${name} must not be an empty array.` }
   }
 
   const value: string[] = []
@@ -147,23 +141,44 @@ export function parseBaseDirsEnv(raw: string): ParseBaseDirsResult {
     if (typeof item !== 'string') {
       return {
         ok: false,
-        error: new BaseDirsConfigError(
-          `BASE_DIRS[${i}] must be a string (received ${describeJsonShape(item)}).`
-        ),
+        message: `${name}[${i}] must be a string (received ${describeJsonShape(item)}).`,
       }
     }
     if (item.trim().length === 0) {
       return {
         ok: false,
-        error: new BaseDirsConfigError(
-          `BASE_DIRS[${i}] must be a non-empty, non-whitespace path string.`
-        ),
+        message: `${name}[${i}] must be a non-empty, non-whitespace ${noun} string.`,
       }
     }
     value.push(item)
   }
 
   return { ok: true, value }
+}
+
+/** Parse `BASE_DIRS`. Syntax only — existence is {@link normalizeRealpath}'s job. */
+export function parseBaseDirsEnv(raw: string): ParseBaseDirsResult {
+  const parsed = parseJsonStringArray('BASE_DIRS', 'path', raw)
+  if (parsed.ok) {
+    return parsed
+  }
+  return {
+    ok: false,
+    error: new BaseDirsConfigError(
+      parsed.message,
+      parsed.cause === undefined ? undefined : { cause: parsed.cause }
+    ),
+  }
+}
+
+/** Parse `IGNORE_PATHS`; unset or empty means no patterns. */
+export function parseIgnorePathsEnv(
+  raw: string | undefined
+): { ok: true; value: string[] } | { ok: false; message: string } {
+  if (raw === undefined || raw.length === 0) {
+    return { ok: true, value: [] }
+  }
+  return parseJsonStringArray('IGNORE_PATHS', 'pattern', raw)
 }
 
 // ============================================

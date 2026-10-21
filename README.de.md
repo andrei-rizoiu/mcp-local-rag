@@ -39,7 +39,7 @@ dem ersten Modelldownload funktionieren Textimport und Suche offline.
 
 ### Voraussetzungen
 
-- Node.js 22 oder neuer
+- Node.js 22.20 oder neuer
 - Internetzugang beim ersten Start, um das npm-Paket und das Embedding-Modell herunterzuladen
 - Ein Verzeichnis mit den zu durchsuchenden Dokumenten
 
@@ -276,6 +276,7 @@ Optionen. Verwende denselben `DB_PATH`, wenn mehrere Befehle denselben Index nut
 |---------------------|----------|---------|-------------|
 | `BASE_DIR` | `--base-dir` | Aktuelles Verzeichnis | Ein Stammverzeichnis; die CLI-Option kann bei `ingest`, `list` und `sync` mehrfach verwendet werden |
 | `BASE_DIRS` | – | nicht gesetzt | JSON-Array mit Stammverzeichnissen; hat Vorrang vor `BASE_DIR` |
+| `IGNORE_PATHS` | – | nicht gesetzt | JSON-Array mit Glob-Mustern für Dateien, die nicht in den Index sollen |
 | `DB_PATH` | `--db-path` | `./lancedb/` | Pfad zur Vektordatenbank |
 | `CACHE_DIR` | `--cache-dir` | `./models/` | Verzeichnis für den Modellcache |
 | `HF_ENDPOINT` | – | `https://huggingface.co` | Endpunkt für Hugging-Face-Modelldownloads; bei blockierten Direktdownloads die URL eines Mirrors verwenden |
@@ -288,6 +289,14 @@ dem aktuellen Verzeichnis. Es zählt nur die Angabe mit der höchsten Priorität
 Stammverzeichnisse aus verschiedenen Quellen werden nicht zusammengeführt. Ungültiges
 `BASE_DIRS` führt zu einem Fehler. Relative Werte für `DB_PATH` und `CACHE_DIR` beziehen sich
 auf das Arbeitsverzeichnis.
+
+Um Dateien aus dem Index herauszuhalten, setze `IGNORE_PATHS` auf ein JSON-Array mit
+Glob-Mustern, zum Beispiel `IGNORE_PATHS='["plugs/**","**/*.draft.md"]'`. Jedes Muster wird mit
+dem Pfad der Datei relativ zu ihrem Stammverzeichnis verglichen, auf jedem Betriebssystem mit
+`/` geschrieben. `*` und `**` erfassen keine Namen, die mit `.` beginnen. Schreibe solche
+Verzeichnisse aus, etwa `".obsidian/**"`. Wenn `ingest`, `list` und `sync` ein Verzeichnis
+verarbeiten, überspringen sie passende Dateien, und `sync` entfernt bereits indexierte Dateien
+wieder aus dem Index. Ungültiges `IGNORE_PATHS` führt zu einem Fehler.
 
 </details>
 

@@ -10,7 +10,12 @@ import {
   resolveDtype,
 } from './cli/options.js'
 import { RAGServer } from './server/index.js'
-import { BaseDirsConfigError, parseBaseDirsEnv, resolveBaseDirs } from './utils/base-dirs.js'
+import {
+  BaseDirsConfigError,
+  parseBaseDirsEnv,
+  parseIgnorePathsEnv,
+  resolveBaseDirs,
+} from './utils/base-dirs.js'
 import {
   DEFAULT_MAX_FILE_SIZE,
   DEFAULT_RERANK_TIMEOUT_MS,
@@ -240,6 +245,11 @@ export async function resolveServerConfig(
   cwd: string
 ): Promise<ServerConfig> {
   const roots = await resolveRoots(env, cwd)
+  // Fail closed: starting without the exclusion would index the files it names.
+  const ignorePatterns = parseIgnorePathsEnv(env['IGNORE_PATHS'])
+  if (!ignorePatterns.ok) {
+    throw new Error(ignorePatterns.message)
+  }
   const maxFileSize = resolveMaxFileSize(env)
   const configWarnings = [...roots.warnings]
   if (maxFileSize.warning !== undefined) {
@@ -252,6 +262,7 @@ export async function resolveServerConfig(
     cacheDir: env['CACHE_DIR'] || './models/',
     baseDirs: roots.baseDirs,
     rawBaseDirs: roots.rawBaseDirs,
+    ignorePatterns: ignorePatterns.value,
     maxFileSize: maxFileSize.value,
     device: resolveDevice(env['RAG_DEVICE']),
     storeImages: false,

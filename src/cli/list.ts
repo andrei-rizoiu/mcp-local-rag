@@ -1,13 +1,16 @@
 // CLI list subcommand — list files and ingestion status
 
-import { resolve, sep } from 'node:path'
-
 import { listDocuments } from '../features/list.js'
 import { displayPath } from '../utils/base-dirs.js'
 import { MAX_SCAN_DEPTH } from '../utils/limits.js'
-import { bfsCollectSupportedFiles } from '../utils/scan.js'
+import { bfsCollectSupportedFiles, type ScanExclusion } from '../utils/scan.js'
 import { nonAbsolutePrefixes } from '../utils/scope-match.js'
-import { createVectorStore, formatCliError, resolveCliBaseDirsOrExit } from './common.js'
+import {
+  buildCliScanExclusionOrExit,
+  createVectorStore,
+  formatCliError,
+  resolveCliBaseDirsOrExit,
+} from './common.js'
 import type { GlobalOptions } from './options.js'
 import {
   consumeBaseDirArg,
@@ -43,16 +46,12 @@ interface ScanRootResult {
  */
 async function scanRoot(
   root: string,
-  excludePaths: string[],
+  exclusion: ScanExclusion,
   scope?: string[]
 ): Promise<ScanRootResult> {
-  const { files, unreadableDirs, depthLimited } = await bfsCollectSupportedFiles(
-    root,
-    excludePaths,
-    {
-      scope,
-    }
-  )
+  const { files, unreadableDirs, depthLimited } = await bfsCollectSupportedFiles(root, exclusion, {
+    scope,
+  })
 
   const warnings: string[] = []
   for (const { dirPath, code } of unreadableDirs) {
@@ -264,19 +263,15 @@ export async function runList(args: string[], globalOptions: GlobalOptions = {})
     throw new Error('internal: resolver returned no effective base directories')
   }
   const baseDir = firstRawBaseDir
+  const exclusion = buildCliScanExclusionOrExit({
+    dbPath: globalConfig.dbPath,
+    cacheDir: globalConfig.cacheDir,
+    roots: baseDirsConfig,
+  })
 
   const vectorStore = createVectorStore(globalConfig)
   try {
     await vectorStore.initialize()
-
-    // Build exclude paths (resolved to absolute, platform-aware trailing
-    // separator). Applied uniformly to every root so dbPath/cacheDir remain
-    // excluded under each root even when they happen to live below one of
-    // them.
-    const excludePaths = [
-      `${resolve(globalConfig.dbPath)}${sep}`,
-      `${resolve(globalConfig.cacheDir)}${sep}`,
-    ]
 
     const ingested = await vectorStore.listFiles()
     const listed = await listDocuments({
@@ -284,7 +279,7 @@ export async function runList(args: string[], globalOptions: GlobalOptions = {})
       dbPath: globalConfig.dbPath,
       ingested,
       scope: options.scope,
-      scan: (root, scope) => scanRoot(root, excludePaths, scope),
+      scan: (root, scope) => scanRoot(root, exclusion, scope),
     })
     for (const warning of listed.warnings) {
       console.error(`Warning [${warning.baseDir}]: ${warning.message}`)

@@ -1242,7 +1242,7 @@ describe('runSync — request classification and scan roots', () => {
       label: 'a path under an excluded prefix',
       kind: 'excluded' as const,
       requestedPath: `${DB_PATH}/raw-data/x.md`,
-      expectedMessage: `Sync path is inside the database or cache directory: ${DB_PATH}/raw-data/x.md`,
+      expectedMessage: `Sync path is excluded (database or cache directory, or IGNORE_PATHS): ${DB_PATH}/raw-data/x.md`,
     },
     {
       label: 'an unsupported extension',

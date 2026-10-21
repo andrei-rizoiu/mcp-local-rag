@@ -6,9 +6,11 @@ import {
   type BaseDirsConfig,
   type BaseDirsConfigWarning,
   parseBaseDirsEnv,
+  parseIgnorePathsEnv,
   resolveBaseDirs,
 } from '../utils/base-dirs.js'
 import { getCauseChain } from '../utils/errors.js'
+import { buildScanExclusion, type ScanExclusion } from '../utils/scan.js'
 import { checkSensitivePath } from '../utils/sensitive-path.js'
 import { VectorStore } from '../vectordb/index.js'
 import {
@@ -146,6 +148,20 @@ function exitOnSensitiveEnvRoots(): void {
   if (baseDir !== undefined && baseDir.trim().length > 0) {
     exitOnSensitiveRoot([baseDir], checkSensitivePath, 'BASE_DIR')
   }
+}
+
+/** The scan exclusion for `ingest`, `list`, and `sync`; exits on an invalid `IGNORE_PATHS`. */
+export function buildCliScanExclusionOrExit(input: {
+  dbPath: string
+  cacheDir: string
+  roots: BaseDirsConfig
+}): ScanExclusion {
+  const ignorePatterns = parseIgnorePathsEnv(process.env['IGNORE_PATHS'])
+  if (!ignorePatterns.ok) {
+    console.error(ignorePatterns.message)
+    process.exit(1)
+  }
+  return buildScanExclusion({ ...input, ignorePatterns: ignorePatterns.value })
 }
 
 export async function resolveCliBaseDirsOrExit(cliRoots: string[]): Promise<CliBaseDirsResolution> {

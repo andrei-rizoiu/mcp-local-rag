@@ -332,7 +332,7 @@ describe('scanBaseDir presentation contract over the shared walker', () => {
   })
 
   it('returns sorted supported files from the shared walker', async () => {
-    const { files } = await scanBaseDir(root, [])
+    const { files } = await scanBaseDir(root, { prefixes: [] })
 
     expect(files).toEqual(
       [join(root, 'alpha.md'), join(root, 'sub', 'middle.md'), join(root, 'zebra.md')].sort()
@@ -341,14 +341,14 @@ describe('scanBaseDir presentation contract over the shared walker', () => {
   })
 
   it('renders the unreadable-directory warning verbatim', async () => {
-    const { files, warnings } = await scanBaseDir(missing, [])
+    const { files, warnings } = await scanBaseDir(missing, { prefixes: [] })
 
     expect(files).toEqual([])
     expect(warnings).toEqual([`cannot read directory: ${displayPath(missing)} (ENOENT)`])
   })
 
   it('emits the depth-limit warning once per call even with several depth-limited branches', async () => {
-    const { warnings } = await scanBaseDir(root, [])
+    const { warnings } = await scanBaseDir(root, { prefixes: [] })
 
     const depthWarnings = warnings.filter((w) => w.includes('exceed the maximum depth'))
     expect(depthWarnings).toEqual([

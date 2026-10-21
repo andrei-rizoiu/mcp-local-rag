@@ -212,7 +212,7 @@ beforeAll(async () => {
     {
       name: 'scanBaseDir',
       run: async (root, scope) => {
-        const result = await scanBaseDir(root, [], scope)
+        const result = await scanBaseDir(root, { prefixes: [] }, scope)
         return {
           files: result.files,
           warnedFor: (dir) => result.warnings.some((w) => w.includes(basename(dir))),
@@ -223,7 +223,7 @@ beforeAll(async () => {
     {
       name: 'bfsCollectSupportedFiles',
       run: async (root, scope) => {
-        const result = await bfsCollectSupportedFiles(root, [], { scope })
+        const result = await bfsCollectSupportedFiles(root, { prefixes: [] }, { scope })
         return {
           files: result.files,
           warnedFor: (dir) => result.unreadableDirs.some((u) => u.dirPath === dir),
@@ -446,7 +446,7 @@ describe('bfsCollectSupportedFiles coverage facts', () => {
   it('reports the first unvisited directory in depthLimitedDirs and omits fully visited siblings', async () => {
     // maxDepth 3: base(0) a(1) x(1) a/b(2) a/bc(2) x/y(2) are read; a/b/c(3) is
     // dequeued and skipped, so it is the only unobserved region.
-    const result = await bfsCollectSupportedFiles(base, [], { maxDepth: 3 })
+    const result = await bfsCollectSupportedFiles(base, { prefixes: [] }, { maxDepth: 3 })
 
     expect(result.depthLimitedDirs).toEqual([dirABC])
     // Fully visited siblings/ancestors are observed and must stay prunable.
@@ -458,11 +458,11 @@ describe('bfsCollectSupportedFiles coverage facts', () => {
   })
 
   it('keeps depthLimited equal to depthLimitedDirs.length > 0', async () => {
-    const limited = await bfsCollectSupportedFiles(base, [], { maxDepth: 3 })
+    const limited = await bfsCollectSupportedFiles(base, { prefixes: [] }, { maxDepth: 3 })
     expect(limited.depthLimitedDirs.length).toBeGreaterThan(0)
     expect(limited.depthLimited).toBe(true)
 
-    const complete = await bfsCollectSupportedFiles(base, [], { maxDepth: 10 })
+    const complete = await bfsCollectSupportedFiles(base, { prefixes: [] }, { maxDepth: 10 })
     expect(complete.depthLimitedDirs).toEqual([])
     expect(complete.depthLimited).toBe(false)
   })
@@ -470,7 +470,7 @@ describe('bfsCollectSupportedFiles coverage facts', () => {
   it('records every depth-limited branch, one entry per first unvisited directory', async () => {
     // maxDepth 2: a/b, a/bc and x/y are all dequeued and skipped; a/b/c is never
     // enqueued, so descendants of an unobserved directory are not repeated.
-    const result = await bfsCollectSupportedFiles(base, [], { maxDepth: 2 })
+    const result = await bfsCollectSupportedFiles(base, { prefixes: [] }, { maxDepth: 2 })
 
     expect(sorted(result.depthLimitedDirs)).toEqual(sorted([dirAB, dirABc, dirXY]))
     expect(result.depthLimitedDirs).not.toContain(dirABC)
@@ -478,7 +478,7 @@ describe('bfsCollectSupportedFiles coverage facts', () => {
 
   it('keeps the { dirPath, code } shape for an unreadable directory', async () => {
     mocks.readdir.mockImplementation(realDelegate(new Set([dirA])))
-    const result = await bfsCollectSupportedFiles(base, [])
+    const result = await bfsCollectSupportedFiles(base, { prefixes: [] })
 
     expect(result.unreadableDirs).toEqual([{ dirPath: dirA, code: 'EACCES' }])
     expect(result.depthLimitedDirs).toEqual([])
@@ -510,7 +510,7 @@ describe('bfsCollectSupportedFiles coverage facts', () => {
       ])
     )
 
-    const result = await bfsCollectSupportedFiles(symRoot, [])
+    const result = await bfsCollectSupportedFiles(symRoot, { prefixes: [] })
 
     expect(result.skippedSymlinks).toEqual([
       join(symRoot, 'linked-dir'),
@@ -524,12 +524,12 @@ describe('bfsCollectSupportedFiles coverage facts', () => {
   it('counts depth from whichever root it is passed', async () => {
     // Same maxDepth, different roots: /base/a/b as its own depth-zero root
     // reaches deep.md, which /base cannot reach within the same budget.
-    const fromBase = await bfsCollectSupportedFiles(base, [], { maxDepth: 2 })
+    const fromBase = await bfsCollectSupportedFiles(base, { prefixes: [] }, { maxDepth: 2 })
     expect(fromBase.files).not.toContain(fDeep)
     expect(fromBase.depthLimitedDirs).toContain(dirAB)
 
     visited.length = 0
-    const fromSubtree = await bfsCollectSupportedFiles(dirAB, [], { maxDepth: 2 })
+    const fromSubtree = await bfsCollectSupportedFiles(dirAB, { prefixes: [] }, { maxDepth: 2 })
     expect(fromSubtree.files).toContain(fDeep)
     expect(fromSubtree.depthLimitedDirs).toEqual([])
     expect(visited).toEqual(expect.arrayContaining([dirAB, dirABC]))

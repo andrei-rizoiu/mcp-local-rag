@@ -9,7 +9,7 @@
 // the caller, so there is no daemon or watchdog here.
 
 import { readFile, stat } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 
 import { SemanticChunker } from '../chunker/index.js'
 import { removeEmbeddingSnapshot } from '../embedder/embedding-snapshot.js'
@@ -30,7 +30,12 @@ import {
   classifyRequestedPath,
 } from '../utils/scan.js'
 import type { QualityProfile } from '../utils/visual-profile.js'
-import { createEmbedder, createVectorStore, formatCliError } from './common.js'
+import {
+  buildCliScanExclusionOrExit,
+  createEmbedder,
+  createVectorStore,
+  formatCliError,
+} from './common.js'
 import { buildFileIngestOptions, ingestSingleFile, resolveConfig } from './ingest.js'
 import type { GlobalOptions } from './options.js'
 import { consumeBaseDirArg, requireVisualQuality, resolveGlobalConfig } from './options.js'
@@ -216,7 +221,11 @@ export async function runSync(args: string[], globalOptions: GlobalOptions = {})
     console.error(warning.message)
   }
 
-  const excludePaths = [`${resolve(config.dbPath)}${sep}`, `${resolve(config.cacheDir)}${sep}`]
+  const exclusion = buildCliScanExclusionOrExit({
+    dbPath: config.dbPath,
+    cacheDir: config.cacheDir,
+    roots: config.baseDirs,
+  })
   const vectorStore = createVectorStore(globalConfig)
   // The parser's realpath check is the security boundary, so it takes the
   // realpath'd roots; scanning uses the resolve()-only `rawBaseDirs` so scanned
@@ -244,12 +253,12 @@ export async function runSync(args: string[], globalOptions: GlobalOptions = {})
     canonicalizeRequestedPath,
     // The walker's own predicates, so an explicitly requested path is subject to
     // the same rules as a discovered one and is refused before it is read.
-    classifyPath: async (path: string) => await classifyRequestedPath(path, excludePaths),
+    classifyPath: async (path: string) => await classifyRequestedPath(path, exclusion),
     // No `scope` argument, on purpose: a scope-pruned directory appears in none
     // of the coverage arrays, which would hide an unobserved region and make
     // prune unsafe.
     scanDir: async (rootPath: string) =>
-      await bfsCollectSupportedFiles(rootPath, excludePaths, { maxDepth: MAX_SCAN_DEPTH }),
+      await bfsCollectSupportedFiles(rootPath, exclusion, { maxDepth: MAX_SCAN_DEPTH }),
     // Size first, bytes second: `MAX_FILE_SIZE` is otherwise enforced inside
     // the parser, long after the whole file is already in memory here.
     // Declining (`null`) keeps the rest of the run usable rather than aborting
@@ -299,7 +308,7 @@ export async function runSync(args: string[], globalOptions: GlobalOptions = {})
       // decides requested-path containment in (the parser's boundary domain).
       canonicalRoots: config.baseDirs.baseDirs,
       dbPath: config.dbPath,
-      excludePaths,
+      excludePaths: exclusion.prefixes,
       platform: process.platform,
       // resolve() (never realpath) so the requested path is spelled like the
       // stored DB keys; the core validates it against the configured roots.

@@ -473,7 +473,7 @@ function requestedPathRejection(
     case 'symlink':
       return `Sync path is a symbolic link, which sync never follows: ${path}`
     case 'excluded':
-      return `Sync path is inside the database or cache directory: ${path}`
+      return `Sync path is excluded (database or cache directory, or IGNORE_PATHS): ${path}`
     case 'unsupported':
       return `Sync path is not a supported document type: ${path}`
   }

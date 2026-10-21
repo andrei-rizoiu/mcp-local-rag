@@ -38,7 +38,7 @@ text ingestion and search work offline.
 
 ### Requirements
 
-- Node.js 22 or later
+- Node.js 22.20 or later
 - Internet access on first use to download the npm package and embedding model
 - A directory containing the documents you want to search
 
@@ -266,6 +266,7 @@ Keep the same `DB_PATH` when commands should use the same index.
 |---------------------|----------|---------|-------------|
 | `BASE_DIR` | `--base-dir` | Current directory | One document root; the CLI flag is repeatable on `ingest`, `list`, and `sync` |
 | `BASE_DIRS` | N/A | (unset) | JSON array of document roots; takes precedence over `BASE_DIR` |
+| `IGNORE_PATHS` | N/A | (unset) | JSON array of glob patterns for files to keep out of the index |
 | `DB_PATH` | `--db-path` | `./lancedb/` | Vector database location |
 | `CACHE_DIR` | `--cache-dir` | `./models/` | Model cache directory |
 | `HF_ENDPOINT` | N/A | `https://huggingface.co` | Hugging Face model download endpoint; use a mirror URL when direct downloads are blocked |
@@ -276,6 +277,13 @@ File operations stay within configured roots. For multiple directories, set
 roots, `BASE_DIRS`, `BASE_DIR`, then the current directory. Only the highest-priority source is
 used; roots from different sources are not merged. Invalid `BASE_DIRS` is an error. Relative
 `DB_PATH` and `CACHE_DIR` are resolved from the working directory.
+
+To keep files out of the index, set `IGNORE_PATHS` to a JSON array of glob patterns, for example
+`IGNORE_PATHS='["plugs/**","**/*.draft.md"]'`. Each pattern is matched against the file's path
+relative to the root that contains it, written with `/` on every OS. `*` and `**` do not match
+names that start with `.`, so write such directories out, as in `".obsidian/**"`. `ingest`,
+`list`, and `sync` skip matching files when they scan a directory, and `sync` removes any that
+are already indexed. Invalid `IGNORE_PATHS` is an error.
 
 </details>
 

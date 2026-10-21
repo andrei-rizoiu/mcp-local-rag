@@ -50,6 +50,8 @@ interface RAGServerConfigBase {
    * Legacy `{ baseDir }` callers fall back to `baseDirs`.
    */
   rawBaseDirs?: readonly string[]
+  /** `IGNORE_PATHS` globs, relative to the root containing each file. */
+  ignorePatterns?: readonly string[]
   /** Configuration validation warnings to surface to users via MCP annotations */
   configWarnings?: string[]
   /**

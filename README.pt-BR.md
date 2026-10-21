@@ -38,7 +38,7 @@ primeiro download do modelo, a importação de texto e a busca funcionam offline
 
 ### Requisitos
 
-- Node.js 22 ou mais recente
+- Node.js 22.20 ou mais recente
 - Acesso à internet no primeiro uso para baixar o pacote npm e o modelo de embeddings
 - Um diretório com os documentos que você quer pesquisar
 
@@ -272,6 +272,7 @@ o mesmo `DB_PATH` se os comandos precisarem compartilhar um índice.
 |---------------------|----------|---------|-------------|
 | `BASE_DIR` | `--base-dir` | Diretório atual | Um diretório raiz; a opção da CLI pode ser repetida em `ingest`, `list` e `sync` |
 | `BASE_DIRS` | N/D | não definido | Array JSON de diretórios raiz; tem prioridade sobre `BASE_DIR` |
+| `IGNORE_PATHS` | N/D | não definido | Array JSON de padrões glob para arquivos que devem ficar fora do índice |
 | `DB_PATH` | `--db-path` | `./lancedb/` | Local do banco de dados vetorial |
 | `CACHE_DIR` | `--cache-dir` | `./models/` | Diretório de cache dos modelos |
 | `HF_ENDPOINT` | N/D | `https://huggingface.co` | Endereço para download de modelos do Hugging Face; use a URL de um espelho quando downloads diretos estiverem bloqueados |
@@ -283,6 +284,14 @@ Prioridade: diretórios da CLI, `BASE_DIRS`, `BASE_DIR` e diretório atual. Só 
 prioridade é usada; os diretórios de fontes diferentes não são combinados. Um `BASE_DIRS`
 inválido gera erro. Caminhos relativos em `DB_PATH` e `CACHE_DIR` partem do diretório de
 trabalho.
+
+Para deixar arquivos fora do índice, defina `IGNORE_PATHS` com um array JSON de padrões glob,
+por exemplo `IGNORE_PATHS='["plugs/**","**/*.draft.md"]'`. Cada padrão é comparado com o caminho
+do arquivo relativo ao diretório raiz que o contém, escrito com `/` em qualquer sistema
+operacional. `*` e `**` não correspondem a nomes que começam com `.`, então escreva esses
+diretórios por extenso, como `".obsidian/**"`. Quando `ingest`, `list` e `sync` percorrem um
+diretório, ignoram os arquivos correspondentes, e `sync` remove do índice os que já estavam
+indexados. Um `IGNORE_PATHS` inválido gera erro.
 
 </details>
 
