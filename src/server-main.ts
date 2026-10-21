@@ -255,6 +255,7 @@ export async function resolveServerConfig(
     maxFileSize: maxFileSize.value,
     device: resolveDevice(env['RAG_DEVICE']),
     storeImages: false,
+    readOnly: env['RAG_READ_ONLY'] === '1',
   }
 
   configWarnings.push(...applyOptionalSettings(config, env))

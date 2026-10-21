@@ -32,6 +32,8 @@ interface RAGServerConfigBase {
   hybridWeight?: number
   /** Maximum number of files to keep in search results (optional) */
   maxFiles?: number
+  /** List and accept only the read-only tools (optional, default: false; env RAG_READ_ONLY=1) */
+  readOnly?: boolean
   /** Minimum chunk length in characters (optional, default: 50) */
   chunkMinLength?: number
   /** Embed each chunk behind its document title (optional, default: false) */
