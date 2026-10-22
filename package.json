@@ -1,6 +1,6 @@
 {
   "name": "mcp-local-rag",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "description": "Local RAG MCP Server - Easy-to-setup document search with minimal configuration",
   "type": "module",
   "main": "dist/index.js",
@@ -92,7 +92,7 @@
   },
   "packageManager": "pnpm@11.24.0",
   "engines": {
-    "node": ">=22.20.0"
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx}": [
