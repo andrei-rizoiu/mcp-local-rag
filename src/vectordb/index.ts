@@ -273,6 +273,8 @@ export class VectorStore {
     // - prefixOnly=false: Generate ngrams from all positions for proper CJK support
     await this.table.createIndex('text', {
       config: Index.fts({
+        // Quoted queries require token positions; LanceDB defaults to omitting them.
+        withPosition: true,
         baseTokenizer: 'ngram',
         ngramMinLength: 2,
         ngramMaxLength: 3,
