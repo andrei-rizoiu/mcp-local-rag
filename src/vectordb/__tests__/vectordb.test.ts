@@ -281,6 +281,31 @@ describe('VectorStore', () => {
 
   describe('Phase 1: FTS Index Creation and Migration', () => {
     describe('FTS index auto-creation', () => {
+      it('supports quoted phrases after index creation and optimization', async () => {
+        const store = new VectorStore({ dbPath: testDbPath, tableName: 'chunks' })
+        await store.initialize()
+        await store.insertChunks([
+          createTestChunk('alpha beta gamma', '/test/phrase.txt', 0),
+          createTestChunk('unrelated document', '/test/unrelated.txt', 0),
+        ])
+        await store.optimize()
+
+        const table = privateMembers<{ table: import('@lancedb/lancedb').Table }>(store).table
+        expect(await table.listIndices()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              indexDetails: expect.objectContaining({ with_position: true }),
+            }),
+          ])
+        )
+        const matches = await table
+          .search('"alpha beta"', 'fts', 'text')
+          .select(['filePath', '_score'])
+          .limit(10)
+          .toArray()
+        expect(matches.map((row) => row.filePath)).toEqual(['/test/phrase.txt'])
+      })
+
       it('should create FTS index on initialize when table exists', async () => {
         const store = new VectorStore({
           dbPath: testDbPath,

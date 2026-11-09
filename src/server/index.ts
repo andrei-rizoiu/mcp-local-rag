@@ -179,6 +179,7 @@ function attachmentHydrationFailureWarning(): RagTextContentBlock {
  * callable while a sync holds the guard.
  */
 const MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  'finish_batch',
   'sync_start',
   'ingest_file',
   'ingest_data',
@@ -442,17 +443,38 @@ export class RAGServer {
     this.registerHandlers(this.server, readOnly)
   }
 
+  private async handleFinishBatch(): Promise<{ content: RagTextContentBlock[] }> {
+    if (process.env['RAG_DEFER_OPTIMIZE'] !== '1') {
+      throw new Error('Batch mode is disabled')
+    }
+    console.error('BATCH COMPACT START')
+    await this.vectorStore.optimize()
+    console.error('BATCH COMPACT DONE')
+    return { content: [{ type: 'text', text: 'compacted' }] }
+  }
+
   /**
    * Register the tool list and dispatcher on `server`. With `readOnly`, only
    * {@link READ_ONLY_TOOLS} are listed or callable, so the mutation guard is
    * never reached and one instance can serve many connections.
    */
   private registerHandlers(server: Server, readOnly: boolean): void {
+    const declaredTools =
+      process.env['RAG_DEFER_OPTIMIZE'] === '1'
+        ? [
+            ...toolDefinitions,
+            {
+              name: 'finish_batch',
+              description: 'Finish importer batch maintenance',
+              inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
+            },
+          ]
+        : toolDefinitions
     // Tool list
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: readOnly
-        ? toolDefinitions.filter((tool) => READ_ONLY_TOOLS.has(tool.name))
-        : toolDefinitions,
+        ? declaredTools.filter((tool) => READ_ONLY_TOOLS.has(tool.name))
+        : declaredTools,
     }))
 
     // The handlers carry no error mapping: every error reaches the single catch
@@ -479,6 +501,8 @@ export class RAGServer {
         let releaseWhenRequestEnds = MUTATION_TOOLS.has(toolName)
         try {
           switch (toolName) {
+            case 'finish_batch':
+              return await this.handleFinishBatch()
             case 'query_documents':
               return await this.handleQueryDocuments(
                 parseQueryDocumentsInput(request.params.arguments)
@@ -670,7 +694,7 @@ export class RAGServer {
   ): Promise<{ content: RagTextContentBlock[] }> {
     const result = await this.ingestFile(parseIngestFileInput(raw), options)
     // Insertion has committed. Maintenance errors must not restore old rows.
-    if (options.skipOptimize !== true) {
+    if (options.skipOptimize !== true && process.env['RAG_DEFER_OPTIMIZE'] !== '1') {
       await this.vectorStore.optimize()
     }
     return {
@@ -971,7 +995,9 @@ export class RAGServer {
     }
     // Both artifacts and index now describe the replacement. A maintenance
     // failure remains visible to the caller without undoing committed content.
-    await this.vectorStore.optimize()
+    if (process.env['RAG_DEFER_OPTIMIZE'] !== '1') {
+      await this.vectorStore.optimize()
+    }
     return result
   }
 
@@ -1085,7 +1111,9 @@ export class RAGServer {
     await removeEmbeddingSnapshot(this.dbPath, targetPath)
     // Optimize immediately after the DB delete: a later raw-data unlink failure
     // must not skip compaction once the rows are already gone.
-    await this.vectorStore.optimize()
+    if (process.env['RAG_DEFER_OPTIMIZE'] !== '1') {
+      await this.vectorStore.optimize()
+    }
 
     let rawDataExisted = false
     let metaExisted = false
